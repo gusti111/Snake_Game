@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>🐍 Snake Arcade v7.0 · Crown Edition · POLNEP</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="lvl-1">
+
+  <div id="startOverlay">
+    <div id="startCard">
+      <div class="snake-logo">🐍</div>
+      <h1 class="game-title">SNAKE ARCADE</h1>
+      <p class="version-tag">v7.0 · Crown Edition · D3 Teknik Informatika · POLNEP</p>
+
+      <!-- STEP 1: Pilih Mode Utama -->
+      <div id="step-mode" class="step active">
+        <p class="step-label">PILIH MODE PERMAINAN</p>
+        <div class="main-mode-grid">
+          <button class="main-mode-btn active" data-mainmode="single" id="btnSingle">
+            <span class="mmb-icon">👤</span>
+            <span class="mmb-title">SINGLE PLAYER</span>
+            <span class="mmb-desc">Offline · 5 Level · Sandbox</span>
+          </button>
+          <button class="main-mode-btn" data-mainmode="multi" id="btnMulti">
+            <span class="mmb-icon">👥</span>
+            <span class="mmb-title">MULTIPLAYER</span>
+            <span class="mmb-desc">Hingga 8 pemain · Sync 60Hz</span>
+          </button>
+        </div>
+        <button class="next-step-btn" id="btnNext1">LANJUT ▶</button>
+      </div>
+
+      <!-- STEP 2: Setup Single Player -->
+      <div id="step-setup" class="step">
+        <div id="usernameForm">
+          <label for="usernameInput">NAMA PEMAIN</label>
+          <input id="usernameInput" type="text" maxlength="12" placeholder="Maks. 12 karakter" autocomplete="off">
+          <div id="usernameError" class="form-error"></div>
+
+          <div class="mode-selector">
+            <span class="mode-label">DIFFICULTY:</span>
+            <button class="mode-btn active" data-mode="easy">EASY</button>
+            <button class="mode-btn" data-mode="medium">MEDIUM</button>
+            <button class="mode-btn" data-mode="hard">HARD</button>
+          </div>
+          <div class="mode-info" id="modeInfo">3 Nyawa · Dinding Tembus · Kecepatan Normal</div>
+
+          <!-- ★ NEW: Snake Color Picker -->
+          <div class="color-picker-section">
+            <label class="color-picker-label">WARNA ULAR</label>
+            <div class="color-grid" id="colorGrid">
+              <button class="color-swatch active" data-color="#00f5c4" data-name="Cyan Neon" style="--sw:#00f5c4" title="Cyan Neon"></button>
+              <button class="color-swatch" data-color="#00cfff" data-name="Biru Listrik" style="--sw:#00cfff" title="Biru Listrik"></button>
+              <button class="color-swatch" data-color="#ff3b5c" data-name="Merah Bara" style="--sw:#ff3b5c" title="Merah Bara"></button>
+              <button class="color-swatch" data-color="#ffd700" data-name="Emas" style="--sw:#ffd700" title="Emas"></button>
+              <button class="color-swatch" data-color="#ff8c00" data-name="Oranye Api" style="--sw:#ff8c00" title="Oranye Api"></button>
+              <button class="color-swatch" data-color="#b066ff" data-name="Ungu Plasma" style="--sw:#b066ff" title="Ungu Plasma"></button>
+              <button class="color-swatch" data-color="#39ff14" data-name="Hijau Matrix" style="--sw:#39ff14" title="Hijau Matrix"></button>
+              <button class="color-swatch" data-color="#ff69b4" data-name="Pink Sakura" style="--sw:#ff69b4" title="Pink Sakura"></button>
+              <button class="color-swatch" data-color="#ffffff" data-name="Putih Ghost" style="--sw:#ffffff" title="Putih Ghost"></button>
+              <button class="color-swatch" data-color="#ff4500" data-name="Merah Lava" style="--sw:#ff4500" title="Merah Lava"></button>
+              <button class="color-swatch" data-color="#00ffcc" data-name="Mint Aurora" style="--sw:#00ffcc" title="Mint Aurora"></button>
+              <button class="color-swatch color-custom" data-color="custom" data-name="Custom" style="--sw:#888" title="Pilih Warna Sendiri">🎨</button>
+            </div>
+            <input type="color" id="customColorInput" value="#ff00ff" style="opacity:0;position:absolute;pointer-events:none;width:0;height:0;">
+            <p class="color-name-display" id="colorNameDisplay">Cyan Neon</p>
+          </div>
+
+          <!-- ★ NEW: Audio Controls -->
+          <div class="audio-section">
+            <div class="audio-header">
+              <label class="audio-section-label">🎵 AUDIO</label>
+              <label class="toggle-switch" title="Aktifkan/nonaktifkan semua audio">
+                <input type="checkbox" id="audioToggle" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="audio-controls" id="audioControls">
+              <div class="vol-row">
+                <span class="vol-label">🎧 BGM</span>
+                <input type="range" id="bgmVolume" min="0" max="100" value="60" class="vol-slider">
+                <span class="vol-val" id="bgmVolVal">60%</span>
+              </div>
+              <div class="vol-row">
+                <span class="vol-label">🔊 SFX</span>
+                <input type="range" id="sfxVolume" min="0" max="100" value="80" class="vol-slider">
+                <span class="vol-val" id="sfxVolVal">80%</span>
+              </div>
+            </div>
+          </div>
+
+          <button id="startBtn">▶ MULAI GAME</button>
+          <button class="back-btn" id="btnBack1">◀ Kembali</button>
+          <p class="start-hint">atau tekan <kbd>SPACE</kbd></p>
+        </div>
+      </div>
+
+      <!-- STEP 3: Multiplayer Setup Panel -->
+      <div id="step-multi" class="step">
+        <div id="multiPanel">
+          <p class="step-label" id="multiRoleLabel">KONFIGURASI MULTIPLAYER</p>
+
+          <div class="multi-tabs">
+            <button class="multi-tab active" id="tabHost" data-tab="host">📡 HOST (Buat Room)</button>
+            <button class="multi-tab" id="tabJoin" data-tab="join">🔗 JOIN (Masuk Room)</button>
+          </div>
+
+          <!-- ── HOST PANEL ── -->
+          <div id="panelHost" class="multi-content active">
+            <div id="multiUsernameForm">
+              <label for="usernameInputMulti">NAMA HOST</label>
+              <input id="usernameInputMulti" type="text" maxlength="12" placeholder="Nama Host" autocomplete="off">
+              <div id="usernameErrorMulti" class="form-error"></div>
+              <label for="roomNameInput" style="margin-top:8px">NAMA ROOM (opsional)</label>
+              <input id="roomNameInput" type="text" maxlength="20" placeholder="Contoh: POLNEP Squad" autocomplete="off">
+              <div class="mode-selector" style="margin-top:10px">
+                <span class="mode-label">DIFFICULTY:</span>
+                <button class="mode-btn-m active" data-mode="easy">EASY</button>
+                <button class="mode-btn-m" data-mode="medium">MEDIUM</button>
+                <button class="mode-btn-m" data-mode="hard">HARD</button>
+              </div>
+              <div class="color-picker-section compact">
+                <label class="color-picker-label">WARNA ULAR</label>
+                <div class="color-grid" id="colorGridMulti">
+                  <button class="color-swatch active" data-color="#00f5c4" style="--sw:#00f5c4"></button>
+                  <button class="color-swatch" data-color="#00cfff" style="--sw:#00cfff"></button>
+                  <button class="color-swatch" data-color="#ff3b5c" style="--sw:#ff3b5c"></button>
+                  <button class="color-swatch" data-color="#ffd700" style="--sw:#ffd700"></button>
+                  <button class="color-swatch" data-color="#ff8c00" style="--sw:#ff8c00"></button>
+                  <button class="color-swatch" data-color="#b066ff" style="--sw:#b066ff"></button>
+                  <button class="color-swatch" data-color="#39ff14" style="--sw:#39ff14"></button>
+                  <button class="color-swatch" data-color="#ff69b4" style="--sw:#ff69b4"></button>
+                </div>
+              </div>
+            </div>
+            <button id="startMultiBtn">📡 BUAT ROOM</button>
+          </div>
+
+          <!-- ── JOIN PANEL ── -->
+          <div id="panelJoin" class="multi-content">
+            <div class="join-form">
+              <label for="joinUrlInput">SERVER URL / IP (opsional untuk LAN)</label>
+              <input id="joinUrlInput" type="text" placeholder="Kosongkan jika LAN / localhost" autocomplete="off">
+              <label for="joinRoomIdInput" style="margin-top:8px">KODE ROOM</label>
+              <input id="joinRoomIdInput" type="text" maxlength="6" placeholder="6 karakter, cth: ABC123" autocomplete="off" style="text-transform:uppercase; letter-spacing:4px; font-size:1.1rem; text-align:center">
+              <p class="join-hint">Minta kode 6 karakter dari host. Huruf besar semua.</p>
+              <label for="usernameInputJoin">NAMA PEMAIN</label>
+              <input id="usernameInputJoin" type="text" maxlength="12" placeholder="Nama kamu" autocomplete="off">
+              <div id="usernameErrorJoin" class="form-error"></div>
+              <div class="mode-selector">
+                <span class="mode-label">DIFFICULTY:</span>
+                <button class="mode-btn-j active" data-mode="easy">EASY</button>
+                <button class="mode-btn-j" data-mode="medium">MEDIUM</button>
+                <button class="mode-btn-j" data-mode="hard">HARD</button>
+              </div>
+              <div class="color-picker-section compact">
+                <label class="color-picker-label">WARNA ULAR</label>
+                <div class="color-grid" id="colorGridJoin">
+                  <button class="color-swatch active" data-color="#00f5c4" style="--sw:#00f5c4"></button>
+                  <button class="color-swatch" data-color="#00cfff" style="--sw:#00cfff"></button>
+                  <button class="color-swatch" data-color="#ff3b5c" style="--sw:#ff3b5c"></button>
+                  <button class="color-swatch" data-color="#ffd700" style="--sw:#ffd700"></button>
+                  <button class="color-swatch" data-color="#ff8c00" style="--sw:#ff8c00"></button>
+                  <button class="color-swatch" data-color="#b066ff" style="--sw:#b066ff"></button>
+                  <button class="color-swatch" data-color="#39ff14" style="--sw:#39ff14"></button>
+                  <button class="color-swatch" data-color="#ff69b4" style="--sw:#ff69b4"></button>
+                </div>
+              </div>
+            </div>
+            <button id="joinServerBtn">🔗 MASUK KE ROOM</button>
+            <div id="connectStatus" class="connect-status"></div>
+          </div>
+
+          <button class="back-btn" id="btnBackMulti">◀ Kembali</button>
+        </div>
+      </div>
+
+      <div class="overlay-best">🏆 Best Score: <span id="overlayBestDisplay">0</span></div>
+    </div>
+
+  <!-- ════════════════════════════════════════════════════════ -->
+  <!--  LOBBY SCREEN (muncul setelah create/join room)         -->
+  <!-- ════════════════════════════════════════════════════════ -->
+  <div id="lobbyScreen" class="lobby-screen hidden">
+    <div class="lobby-container">
+
+      <!-- Lobby Header -->
+      <div class="lobby-header">
+        <div class="lobby-title-row">
+          <span class="lobby-title">🎮 LOBBY</span>
+          <div class="lobby-room-code-box">
+            <span class="lobby-rcode-label">KODE ROOM</span>
+            <span class="lobby-rcode-value" id="lobbyRoomCode">——</span>
+            <button class="lobby-copy-btn" id="lobbyCopyBtn" title="Salin kode room">📋</button>
+          </div>
+        </div>
+        <div class="lobby-room-name" id="lobbyRoomName">Menghubungkan...</div>
+        <div class="lobby-server-info" id="lobbyServerInfo"></div>
+      </div>
+
+      <!-- QR Code + Share section (only for host) -->
+      <div id="lobbyShareSection" class="lobby-share-section" style="display:none">
+        <div class="lobby-qr-wrap">
+          <div id="lobbyQrPlaceholder" class="lobby-qr-box">
+            <span class="qr-icon">📲</span>
+          </div>
+          <p class="lobby-qr-hint">Scan QR atau bagikan kode room ke kawan</p>
+        </div>
+      </div>
+
+      <!-- Player List -->
+      <div class="lobby-players-section">
+        <div class="lobby-section-label">PEMAIN (<span id="lobbyPlayerCount">0</span>/<span id="lobbyMaxPlayers">8</span>)</div>
+        <div class="lobby-player-list" id="lobbyPlayerList">
+          <!-- populated by JS -->
+        </div>
+      </div>
+
+      <!-- Lobby Chat -->
+      <div class="lobby-chat-section">
+        <div class="lobby-section-label">💬 LOBBY CHAT</div>
+        <div class="lobby-chat-messages" id="lobbyChatMessages"></div>
+        <div class="lobby-chat-input-row">
+          <input id="lobbyChatInput" type="text" maxlength="80" placeholder="Tulis pesan..." autocomplete="off">
+          <button id="lobbyChatSend">Kirim</button>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="lobby-actions">
+        <!-- Host buttons -->
+        <div id="lobbyHostActions" style="display:none">
+          <div class="lobby-status-hint" id="lobbyReadyHint">Menunggu pemain siap...</div>
+          <button id="lobbyStartBtn" class="lobby-start-btn" disabled>▶ MULAI PERTANDINGAN</button>
+        </div>
+        <!-- Guest buttons -->
+        <div id="lobbyGuestActions">
+          <button id="lobbyReadyBtn" class="lobby-ready-btn">✅ SIAP</button>
+          <div class="lobby-status-hint" id="lobbyGuestHint">Tekan SIAP saat kamu sudah siap bermain</div>
+        </div>
+        <button id="lobbyLeaveBtn" class="lobby-leave-btn">🚪 Keluar dari Lobby</button>
+      </div>
+
+      <!-- Countdown Overlay (shown when match is starting) -->
+      <div id="lobbyCountdown" class="lobby-countdown hidden">
+        <div class="lcd-inner">
+          <div class="lcd-label">MATCH STARTING</div>
+          <div class="lcd-number" id="lobbyCountdownNum">3</div>
+          <div class="lcd-sub">Bersiap...</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <!--  GAME WRAPPER                                          -->
+  <!-- ══════════════════════════════════════════════════════ -->
+  <div id="gameWrapper">
+
+    <div id="headerBar">
+      <div class="header-left">
+        <span class="player-name-tag" id="playerNameTag">—</span>
+        <span class="lives-display" id="livesDisplay"></span>
+      </div>
+      <div class="header-center">
+        <div class="stat-block">
+          <span class="stat-label">SKOR</span>
+          <span class="stat-value" id="scoreDisplay">0</span>
+        </div>
+        <div class="stat-block">
+          <span class="stat-label">LEVEL</span>
+          <span class="stat-value" id="levelDisplay">1</span>
+        </div>
+        <div class="stat-block">
+          <span class="stat-label">SPEED</span>
+          <span class="stat-value" id="speedDisplay">220</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="best-score-tag">🏆 <span id="bestDisplay">0</span></div>
+        <div style="display: flex; gap: 6px; align-items: center; margin-top: 4px; justify-content: flex-end;">
+          <div class="mode-tag" id="modeTag">SINGLE</div>
+          <!-- ★ NEW: Mute button in header -->
+          <button id="btnMute" onclick="toggleMuteInGame()" title="Mute/Unmute Audio" style="background: rgba(255,255,255,0.05); color: var(--clr-text); border: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem; padding: 2px 6px; border-radius: 3px; cursor: pointer; transition: all 0.15s;">🔊</button>
+          <button id="btnHeaderExit" onclick="triggerManualExitConfirmation()" style="background: var(--clr-red); color: #fff; border: none; font-family: var(--font-mono); font-size: 0.62rem; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-weight: bold; letter-spacing: 1px; box-shadow: 0 0 8px rgba(255, 59, 92, 0.3); transition: transform 0.1s;">✕ QUIT</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="notifBar"><span id="notifText"></span></div>
+
+    <canvas id="game" width="500" height="500"></canvas>
+
+    <!-- ★ NEW: Combo & streak display overlay on canvas -->
+    <div id="comboDisplay" class="combo-display"></div>
+
+    <div id="dpad">
+      <div></div>
+      <button id="btn-up" aria-label="Atas">▲</button>
+      <div></div>
+      <button id="btn-left" aria-label="Kiri">◀</button>
+      <button id="btn-down" aria-label="Bawah">▼</button>
+      <button id="btn-right" aria-label="Kanan">▶</button>
+    </div>
+
+    <div id="pauseIndicator">⏸ PAUSED</div>
+
+    <div id="infoBar">
+      <div class="info-section">
+        <span class="info-title">🎮 KONTROL</span>
+        <span class="info-item"><kbd>↑↓←→</kbd> Gerak</span>
+        <span class="info-item"><kbd>SPACE</kbd> Pause</span>
+        <span class="info-item"><kbd>ESC / QUIT</kbd> Menu Utama</span>
+        <span class="info-item"><kbd>M</kbd> Mute</span>
+        <span class="info-item"><kbd>TAB</kbd> Quick Chat</span>
+      </div>
+      <div class="info-divider"></div>
+      <div class="info-section">
+        <span class="info-title">🍎 ENTITAS ITEM</span>
+        <span class="info-item"><span class="dot apple"></span> Apel +1</span>
+        <span class="info-item"><span class="dot gold"></span> Emas +3</span>
+        <span class="info-item"><span class="dot banana"></span> Pisang +5</span>
+        <span class="info-item"><span class="dot poop"></span> Kotoran -3 (60 dtk)</span>
+      </div>
+      <div class="info-divider"></div>
+      <div class="info-section">
+        <span class="info-title">📋 REGULASI SERVER</span>
+        <span class="info-item">Otoritas: <strong>Pure Server-Authoritative</strong></span>
+        <span class="info-item">Combo: <strong>3 Makan Beruntun = Bonus Poin</strong></span>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Level Transition Panel -->
+  <div id="levelPanel">
+    <div id="levelPanelCard">
+      <p class="lp-badge" id="lpBadge">LEVEL UP!</p>
+      <h2 id="levelText"></h2>
+      <p id="scoreText"></p>
+      <div id="levelStars"></div>
+      <div style="margin-top: 20px;">
+        <button id="nextLevelBtn">▶ Lanjut Level</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leaderboard Panel -->
+  <div id="leaderboardPanel">
+    <div class="lb-header">📊 LIVE LEADERBOARD</div>
+    <div id="lbList"></div>
+    <div class="lb-footer" id="lbStatus">Single Player Mode</div>
+  </div>
+
+  <!-- Ghost Saboteur -->
+  <div id="ghostBtn" style="display:none">
+    <button id="ghostAttackBtn" title="Injeksi Kotoran Poop Ke Grid Target Lawan">👻 SABOTASE</button>
+    <select id="ghostTargetSelect"></select>
+  </div>
+
+  <script>
+    // ── Helper: Salin Room Code ──────────────────────────────────
+    function copyRoomCodeToClipboard() {
+      const codeText = document.getElementById("roomCodeText").textContent;
+      if (codeText && codeText !== "——" && codeText !== "CLOUD") {
+        navigator.clipboard.writeText(codeText).then(() => {
+          const btn = document.getElementById("copyRoomCode");
+          btn.textContent = "✓ Tersalin";
+          btn.classList.add("copied");
+          setTimeout(() => { btn.textContent = "📋 Salin"; btn.classList.remove("copied"); }, 2000);
+        }).catch(() => {});
+      }
+    }
+
+    // ── Helper: Konfirmasi Keluar ────────────────────────────────
+    function triggerManualExitConfirmation() {
+      if (typeof togglePause === "function" && currentState === "STATE_PLAYING") togglePause();
+      if (confirm("Keluar dari sesi permainan aktif dan kembali ke menu utama?")) {
+        if (typeof exitToMainMenu === "function") exitToMainMenu();
+      }
+    }
+
+    // ── Helper: Mute Toggle dari Header ────────────────────────
+    function toggleMuteInGame() {
+      if (typeof toggleGlobalMute === "function") toggleGlobalMute();
+    }
+  </script>
+
+  <script src="/socket.io/socket.io.js" onerror="window._socketMissing=true"></script>
+  <script src="game.js"></script>
+</body>
+</html>
