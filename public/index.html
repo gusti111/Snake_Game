@@ -3,17 +3,28 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>🐍 Snake Arcade v7.0 · Crown Edition · POLNEP</title>
+  <!-- ★ v8.0: Versi diperbarui sesuai game.js v8.0 -->
+  <title>🐍 Snake Arcade v8.0 · PjBL Grafika Komputer · POLNEP</title>
   <link rel="stylesheet" href="style.css">
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
 </head>
 <body class="lvl-1">
 
+  <!-- ══════════════════════════════════════════════════════════════ -->
+  <!--  START OVERLAY — 3 Step Wizard                               -->
+  <!-- ══════════════════════════════════════════════════════════════ -->
   <div id="startOverlay">
     <div id="startCard">
       <div class="snake-logo">🐍</div>
       <h1 class="game-title">SNAKE ARCADE</h1>
-      <p class="version-tag">v7.0 · Crown Edition · D3 Teknik Informatika · POLNEP</p>
+      <!-- ★ v8.0: Versi diperbarui -->
+      <p class="version-tag">v8.0 · PjBL Grafika Komputer · D3 Teknik Informatika · POLNEP</p>
+
+      <!--
+        ★ v8.0 NEW: Profile Panel — diinjeksi oleh buildProfilePanel() di game.js.
+        Slot kosong ini diperlukan agar insertBefore() ke step-mode berfungsi.
+        game.js akan menyisipkan #profilePanel tepat sebelum #step-mode.
+      -->
 
       <!-- STEP 1: Pilih Mode Utama -->
       <div id="step-mode" class="step active">
@@ -27,13 +38,13 @@
           <button class="main-mode-btn" data-mainmode="multi" id="btnMulti">
             <span class="mmb-icon">👥</span>
             <span class="mmb-title">MULTIPLAYER</span>
-            <span class="mmb-desc">Hingga 8 pemain · Sync 60Hz</span>
+            <span class="mmb-desc">Hingga 8 pemain · Sync Real-time</span>
           </button>
         </div>
         <button class="next-step-btn" id="btnNext1">LANJUT ▶</button>
       </div>
 
-      <!-- STEP 2: Setup Single Player -->
+      <!-- STEP 2: Single Player Setup -->
       <div id="step-setup" class="step">
         <div id="usernameForm">
           <label for="usernameInput">NAMA PEMAIN</label>
@@ -48,32 +59,33 @@
           </div>
           <div class="mode-info" id="modeInfo">3 Nyawa · Dinding Tembus · Kecepatan Normal</div>
 
-          <!-- ★ NEW: Snake Color Picker -->
+          <!-- Snake Color Picker -->
           <div class="color-picker-section">
             <label class="color-picker-label">WARNA ULAR</label>
             <div class="color-grid" id="colorGrid">
-              <button class="color-swatch active" data-color="#00f5c4" data-name="Cyan Neon" style="--sw:#00f5c4" title="Cyan Neon"></button>
-              <button class="color-swatch" data-color="#00cfff" data-name="Biru Listrik" style="--sw:#00cfff" title="Biru Listrik"></button>
-              <button class="color-swatch" data-color="#ff3b5c" data-name="Merah Bara" style="--sw:#ff3b5c" title="Merah Bara"></button>
-              <button class="color-swatch" data-color="#ffd700" data-name="Emas" style="--sw:#ffd700" title="Emas"></button>
-              <button class="color-swatch" data-color="#ff8c00" data-name="Oranye Api" style="--sw:#ff8c00" title="Oranye Api"></button>
-              <button class="color-swatch" data-color="#b066ff" data-name="Ungu Plasma" style="--sw:#b066ff" title="Ungu Plasma"></button>
-              <button class="color-swatch" data-color="#39ff14" data-name="Hijau Matrix" style="--sw:#39ff14" title="Hijau Matrix"></button>
-              <button class="color-swatch" data-color="#ff69b4" data-name="Pink Sakura" style="--sw:#ff69b4" title="Pink Sakura"></button>
-              <button class="color-swatch" data-color="#ffffff" data-name="Putih Ghost" style="--sw:#ffffff" title="Putih Ghost"></button>
-              <button class="color-swatch" data-color="#ff4500" data-name="Merah Lava" style="--sw:#ff4500" title="Merah Lava"></button>
-              <button class="color-swatch" data-color="#00ffcc" data-name="Mint Aurora" style="--sw:#00ffcc" title="Mint Aurora"></button>
-              <button class="color-swatch color-custom" data-color="custom" data-name="Custom" style="--sw:#888" title="Pilih Warna Sendiri">🎨</button>
+              <button class="color-swatch active" data-color="#00f5c4" data-name="Cyan Neon"    style="--sw:#00f5c4" title="Cyan Neon"></button>
+              <button class="color-swatch"        data-color="#00cfff" data-name="Biru Listrik" style="--sw:#00cfff" title="Biru Listrik"></button>
+              <button class="color-swatch"        data-color="#ff3b5c" data-name="Merah Bara"   style="--sw:#ff3b5c" title="Merah Bara"></button>
+              <button class="color-swatch"        data-color="#ffd700" data-name="Emas"         style="--sw:#ffd700" title="Emas"></button>
+              <button class="color-swatch"        data-color="#ff8c00" data-name="Oranye Api"   style="--sw:#ff8c00" title="Oranye Api"></button>
+              <button class="color-swatch"        data-color="#b066ff" data-name="Ungu Plasma"  style="--sw:#b066ff" title="Ungu Plasma"></button>
+              <button class="color-swatch"        data-color="#39ff14" data-name="Hijau Matrix" style="--sw:#39ff14" title="Hijau Matrix"></button>
+              <button class="color-swatch"        data-color="#ff69b4" data-name="Pink Sakura"  style="--sw:#ff69b4" title="Pink Sakura"></button>
+              <button class="color-swatch"        data-color="#ffffff" data-name="Putih Ghost"  style="--sw:#ffffff" title="Putih Ghost"></button>
+              <button class="color-swatch"        data-color="#ff4500" data-name="Merah Lava"   style="--sw:#ff4500" title="Merah Lava"></button>
+              <button class="color-swatch"        data-color="#00ffcc" data-name="Mint Aurora"  style="--sw:#00ffcc" title="Mint Aurora"></button>
+              <button class="color-swatch color-custom" data-color="custom" data-name="Custom" style="--sw:#888"    title="Custom">🎨</button>
             </div>
-            <input type="color" id="customColorInput" value="#ff00ff" style="opacity:0;position:absolute;pointer-events:none;width:0;height:0;">
+            <input type="color" id="customColorInput" value="#ff00ff"
+              style="opacity:0;position:absolute;pointer-events:none;width:0;height:0;">
             <p class="color-name-display" id="colorNameDisplay">Cyan Neon</p>
           </div>
 
-          <!-- ★ NEW: Audio Controls -->
+          <!-- Audio Controls -->
           <div class="audio-section">
             <div class="audio-header">
               <label class="audio-section-label">🎵 AUDIO</label>
-              <label class="toggle-switch" title="Aktifkan/nonaktifkan semua audio">
+              <label class="toggle-switch" title="Aktifkan/nonaktifkan audio">
                 <input type="checkbox" id="audioToggle" checked>
                 <span class="toggle-slider"></span>
               </label>
@@ -98,168 +110,341 @@
         </div>
       </div>
 
-      <!-- STEP 3: Multiplayer Setup Panel -->
+      <!-- STEP 3: Multiplayer Setup -->
       <div id="step-multi" class="step">
         <div id="multiPanel">
           <p class="step-label" id="multiRoleLabel">KONFIGURASI MULTIPLAYER</p>
 
           <div class="multi-tabs">
-            <button class="multi-tab active" id="tabHost" data-tab="host">📡 HOST (Buat Room)</button>
-            <button class="multi-tab" id="tabJoin" data-tab="join">🔗 JOIN (Masuk Room)</button>
+            <button class="multi-tab active" id="tabHost" data-tab="host">📡 HOST ROOM</button>
+            <button class="multi-tab"        id="tabJoin" data-tab="join">🔗 JOIN ROOM</button>
           </div>
 
           <!-- ── HOST PANEL ── -->
           <div id="panelHost" class="multi-content active">
-            <div id="multiUsernameForm">
+            <div class="multi-form-scroll">
               <label for="usernameInputMulti">NAMA HOST</label>
               <input id="usernameInputMulti" type="text" maxlength="12" placeholder="Nama Host" autocomplete="off">
               <div id="usernameErrorMulti" class="form-error"></div>
-              <label for="roomNameInput" style="margin-top:8px">NAMA ROOM (opsional)</label>
-              <input id="roomNameInput" type="text" maxlength="20" placeholder="Contoh: POLNEP Squad" autocomplete="off">
-              <div class="mode-selector" style="margin-top:10px">
+
+              <label for="roomNameInput" style="margin-top:10px">
+                NAMA ROOM <span style="color:var(--clr-dim);font-size:0.7em">(opsional)</span>
+              </label>
+              <input id="roomNameInput" type="text" maxlength="20" placeholder="Cth: POLNEP Squad" autocomplete="off">
+
+              <div class="setting-row" style="margin-top:12px">
                 <span class="mode-label">DIFFICULTY:</span>
-                <button class="mode-btn-m active" data-mode="easy">EASY</button>
-                <button class="mode-btn-m" data-mode="medium">MEDIUM</button>
-                <button class="mode-btn-m" data-mode="hard">HARD</button>
+                <div class="btn-group">
+                  <button class="mode-btn-m active" data-mode="easy">EASY</button>
+                  <button class="mode-btn-m" data-mode="medium">MED</button>
+                  <button class="mode-btn-m" data-mode="hard">HARD</button>
+                  <button class="mode-btn-m" data-mode="boss">BOSS</button>
+                </div>
               </div>
-              <div class="color-picker-section compact">
+
+              <div class="setting-row" style="margin-top:8px">
+                <span class="mode-label">GAME MODE:</span>
+                <div class="btn-group">
+                  <button class="gamemode-btn active" data-gamemode="normal">🎮 Normal</button>
+                  <button class="gamemode-btn" data-gamemode="boss">👹 Boss Battle</button>
+                </div>
+              </div>
+
+              <div class="setting-row" style="margin-top:8px">
+                <span class="mode-label">ROOM:</span>
+                <div class="toggle-row-inline">
+                  <label class="toggle-inline-label">
+                    <label class="toggle-switch small">
+                      <input type="checkbox" id="hostPrivateToggle">
+                      <span class="toggle-slider"></span>
+                    </label>
+                    <span>Privat</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="color-picker-section compact" style="margin-top:10px">
                 <label class="color-picker-label">WARNA ULAR</label>
                 <div class="color-grid" id="colorGridMulti">
                   <button class="color-swatch active" data-color="#00f5c4" style="--sw:#00f5c4"></button>
-                  <button class="color-swatch" data-color="#00cfff" style="--sw:#00cfff"></button>
-                  <button class="color-swatch" data-color="#ff3b5c" style="--sw:#ff3b5c"></button>
-                  <button class="color-swatch" data-color="#ffd700" style="--sw:#ffd700"></button>
-                  <button class="color-swatch" data-color="#ff8c00" style="--sw:#ff8c00"></button>
-                  <button class="color-swatch" data-color="#b066ff" style="--sw:#b066ff"></button>
-                  <button class="color-swatch" data-color="#39ff14" style="--sw:#39ff14"></button>
-                  <button class="color-swatch" data-color="#ff69b4" style="--sw:#ff69b4"></button>
+                  <button class="color-swatch"        data-color="#00cfff" style="--sw:#00cfff"></button>
+                  <button class="color-swatch"        data-color="#ff3b5c" style="--sw:#ff3b5c"></button>
+                  <button class="color-swatch"        data-color="#ffd700" style="--sw:#ffd700"></button>
+                  <button class="color-swatch"        data-color="#ff8c00" style="--sw:#ff8c00"></button>
+                  <button class="color-swatch"        data-color="#b066ff" style="--sw:#b066ff"></button>
+                  <button class="color-swatch"        data-color="#39ff14" style="--sw:#39ff14"></button>
+                  <button class="color-swatch"        data-color="#ff69b4" style="--sw:#ff69b4"></button>
                 </div>
               </div>
-            </div>
-            <button id="startMultiBtn">📡 BUAT ROOM</button>
-          </div>
+            </div><!-- /.multi-form-scroll -->
+
+            <button id="startMultiBtn" class="primary-btn">📡 BUAT ROOM</button>
+            <div id="hostConnectStatus" class="connect-status"></div>
+          </div><!-- /#panelHost -->
 
           <!-- ── JOIN PANEL ── -->
           <div id="panelJoin" class="multi-content">
-            <div class="join-form">
-              <label for="joinUrlInput">SERVER URL / IP (opsional untuk LAN)</label>
-              <input id="joinUrlInput" type="text" placeholder="Kosongkan jika LAN / localhost" autocomplete="off">
-              <label for="joinRoomIdInput" style="margin-top:8px">KODE ROOM</label>
-              <input id="joinRoomIdInput" type="text" maxlength="6" placeholder="6 karakter, cth: ABC123" autocomplete="off" style="text-transform:uppercase; letter-spacing:4px; font-size:1.1rem; text-align:center">
-              <p class="join-hint">Minta kode 6 karakter dari host. Huruf besar semua.</p>
+            <div class="multi-form-scroll">
               <label for="usernameInputJoin">NAMA PEMAIN</label>
               <input id="usernameInputJoin" type="text" maxlength="12" placeholder="Nama kamu" autocomplete="off">
               <div id="usernameErrorJoin" class="form-error"></div>
-              <div class="mode-selector">
-                <span class="mode-label">DIFFICULTY:</span>
-                <button class="mode-btn-j active" data-mode="easy">EASY</button>
-                <button class="mode-btn-j" data-mode="medium">MEDIUM</button>
-                <button class="mode-btn-j" data-mode="hard">HARD</button>
+
+              <label for="joinRoomIdInput" style="margin-top:10px">KODE ROOM</label>
+              <div class="room-code-input-wrap">
+                <input id="joinRoomIdInput" type="text" maxlength="6"
+                  placeholder="Contoh: ABC123"
+                  autocomplete="off"
+                  spellcheck="false"
+                  style="text-transform:uppercase;letter-spacing:4px;font-size:1.1rem;text-align:center">
               </div>
-              <div class="color-picker-section compact">
-                <label class="color-picker-label">WARNA ULAR</label>
-                <div class="color-grid" id="colorGridJoin">
-                  <button class="color-swatch active" data-color="#00f5c4" style="--sw:#00f5c4"></button>
-                  <button class="color-swatch" data-color="#00cfff" style="--sw:#00cfff"></button>
-                  <button class="color-swatch" data-color="#ff3b5c" style="--sw:#ff3b5c"></button>
-                  <button class="color-swatch" data-color="#ffd700" style="--sw:#ffd700"></button>
-                  <button class="color-swatch" data-color="#ff8c00" style="--sw:#ff8c00"></button>
-                  <button class="color-swatch" data-color="#b066ff" style="--sw:#b066ff"></button>
-                  <button class="color-swatch" data-color="#39ff14" style="--sw:#39ff14"></button>
-                  <button class="color-swatch" data-color="#ff69b4" style="--sw:#ff69b4"></button>
+              <p class="join-hint">Minta kode 6 karakter dari host. Huruf besar semua.</p>
+
+              <label for="joinUrlInput" style="margin-top:6px">
+                SERVER URL <span style="color:var(--clr-dim);font-size:0.7em">(kosongkan jika LAN)</span>
+              </label>
+              <input id="joinUrlInput" type="text" placeholder="http://192.168.x.x:3000" autocomplete="off">
+
+              <div class="setting-row" style="margin-top:8px">
+                <span class="mode-label">DIFFICULTY:</span>
+                <div class="btn-group">
+                  <button class="mode-btn-j active" data-mode="easy">EASY</button>
+                  <button class="mode-btn-j" data-mode="medium">MED</button>
+                  <button class="mode-btn-j" data-mode="hard">HARD</button>
                 </div>
               </div>
-            </div>
-            <button id="joinServerBtn">🔗 MASUK KE ROOM</button>
-            <div id="connectStatus" class="connect-status"></div>
-          </div>
 
-          <button class="back-btn" id="btnBackMulti">◀ Kembali</button>
+              <div class="setting-row" style="margin-top:8px">
+                <span class="mode-label">WARNA:</span>
+                <div class="color-grid compact-inline" id="colorGridJoin">
+                  <button class="color-swatch active" data-color="#00f5c4" style="--sw:#00f5c4"></button>
+                  <button class="color-swatch"        data-color="#00cfff" style="--sw:#00cfff"></button>
+                  <button class="color-swatch"        data-color="#ff3b5c" style="--sw:#ff3b5c"></button>
+                  <button class="color-swatch"        data-color="#ffd700" style="--sw:#ffd700"></button>
+                  <button class="color-swatch"        data-color="#ff8c00" style="--sw:#ff8c00"></button>
+                  <button class="color-swatch"        data-color="#b066ff" style="--sw:#b066ff"></button>
+                  <button class="color-swatch"        data-color="#39ff14" style="--sw:#39ff14"></button>
+                  <button class="color-swatch"        data-color="#ff69b4" style="--sw:#ff69b4"></button>
+                </div>
+              </div>
+            </div><!-- /.multi-form-scroll -->
+
+            <!--
+              ★ v8.0: join-action-row — JOIN + QUICK JOIN.
+              quickJoinBtn di-wire di game.js v8.0 via initLobbyButtons().
+            -->
+            <div class="join-action-row">
+              <button id="joinServerBtn" class="primary-btn flex-1">🔗 MASUK KE ROOM</button>
+              <button id="quickJoinBtn" class="secondary-btn" title="Cari & masuk room otomatis">⚡ QUICK</button>
+            </div>
+
+            <!--
+              ★ v8.0: Room Browser Toggle.
+              onclick dihapus — event listener dipasang lewat DOMContentLoaded di bawah.
+              rbAutoRefreshBadge: tampil saat auto-refresh aktif (di-toggle oleh JS).
+            -->
+            <button id="openRoomBrowserBtn" class="room-browser-toggle-btn">
+              🌐 LIHAT ROOM PUBLIK
+              <span id="rbAutoRefreshBadge" class="rb-auto-badge" style="display:none">🔄 auto</span>
+            </button>
+            <div id="roomBrowserPanel" class="room-browser-panel hidden"></div>
+
+            <div id="connectStatus" class="connect-status"></div>
+          </div><!-- /#panelJoin -->
+
+          <button class="back-btn" id="btnBackMulti" style="margin-top:10px">◀ Kembali</button>
         </div>
-      </div>
+      </div><!-- /#step-multi -->
 
       <div class="overlay-best">🏆 Best Score: <span id="overlayBestDisplay">0</span></div>
-    </div>
+    </div><!-- /#startCard -->
+  </div><!-- /#startOverlay -->
 
-  <!-- ════════════════════════════════════════════════════════ -->
-  <!--  LOBBY SCREEN (muncul setelah create/join room)         -->
-  <!-- ════════════════════════════════════════════════════════ -->
+  <!-- ════════════════════════════════════════════════════════════════ -->
+  <!--  LOBBY SCREEN                                                  -->
+  <!-- ════════════════════════════════════════════════════════════════ -->
   <div id="lobbyScreen" class="lobby-screen hidden">
-    <div class="lobby-container">
+    <div class="lobby-container" id="lobby-container">
 
       <!-- Lobby Header -->
       <div class="lobby-header">
         <div class="lobby-title-row">
           <span class="lobby-title">🎮 LOBBY</span>
           <div class="lobby-room-code-box">
-            <span class="lobby-rcode-label">KODE ROOM</span>
+            <span class="lobby-rcode-label">KODE</span>
             <span class="lobby-rcode-value" id="lobbyRoomCode">——</span>
             <button class="lobby-copy-btn" id="lobbyCopyBtn" title="Salin kode room">📋</button>
           </div>
+          <!--
+            ★ FASE 1: LAN/Cloud badge — diperbarui oleh updateConnectionBadge() di game.js.
+            Class default: "lan" → teks default: "📡 LAN".
+            Berganti menjadi class "cloud" + teks "☁️ CLOUD" saat terdeteksi online.
+          -->
+          <span id="connectionTypeBadge" class="connection-badge lan">📡 LAN</span>
+          <!--
+            ★ FASE 1: Game Mode Tag — diperbarui oleh lobbyUpdate event di game.js.
+            Nilai: "🎮 NORMAL" / "👹 BOSS MODE" / "🏆 RANKED".
+          -->
+          <span id="lobbyGameModeTag" class="lobby-gamemode-tag normal">🎮 NORMAL</span>
+          <!--
+            ★ v8.0: Ping display di header lobby — diperbarui oleh pingUpdate / pongCheck.
+            Display: none by default, ditampilkan oleh JS saat ping diterima.
+          -->
+          <span id="lobbyMyPing" class="lobby-ping-badge ping-good" style="display:none">—ms</span>
         </div>
         <div class="lobby-room-name" id="lobbyRoomName">Menghubungkan...</div>
+        <!-- ★ v8.0: Server info row (hostname/LAN URL) — diisi oleh showLobbyScreen() -->
         <div class="lobby-server-info" id="lobbyServerInfo"></div>
+        <!--
+          ★ FASE 1: Server Feature Pills — diisi oleh updateServerFeaturePills() / renderServerFeaturePills().
+          Contoh pill: "✓ Lobby v2", "✓ Reconnect", "✓ Room Browser", dsb.
+        -->
+        <div id="serverFeatureList" class="server-feature-list"></div>
       </div>
 
-      <!-- QR Code + Share section (only for host) -->
+      <!-- QR Share — host only (ditampilkan/disembunyikan oleh showLobbyScreen()) -->
       <div id="lobbyShareSection" class="lobby-share-section" style="display:none">
         <div class="lobby-qr-wrap">
           <div id="lobbyQrPlaceholder" class="lobby-qr-box">
-            <span class="qr-icon">📲</span>
+            <span style="font-size:2rem">📲</span>
+            <span style="font-size:0.65rem;color:var(--clr-dim)">Generating QR...</span>
           </div>
-          <p class="lobby-qr-hint">Scan QR atau bagikan kode room ke kawan</p>
+          <!-- ★ v8.0: URL aktual untuk sharing host (diisi oleh serverInfo event) -->
+          <div class="lobby-host-url-row">
+            <span class="lobby-qr-hint">Scan QR atau bagikan kode ke teman</span>
+            <span class="lobby-host-url" id="hostUrlDisplay"></span>
+          </div>
         </div>
       </div>
 
-      <!-- Player List -->
-      <div class="lobby-players-section">
-        <div class="lobby-section-label">PEMAIN (<span id="lobbyPlayerCount">0</span>/<span id="lobbyMaxPlayers">8</span>)</div>
-        <div class="lobby-player-list" id="lobbyPlayerList">
-          <!-- populated by JS -->
-        </div>
-      </div>
+      <!-- Two-column layout: players + chat/settings -->
+      <div class="lobby-main-grid">
 
-      <!-- Lobby Chat -->
-      <div class="lobby-chat-section">
-        <div class="lobby-section-label">💬 LOBBY CHAT</div>
-        <div class="lobby-chat-messages" id="lobbyChatMessages"></div>
-        <div class="lobby-chat-input-row">
-          <input id="lobbyChatInput" type="text" maxlength="80" placeholder="Tulis pesan..." autocomplete="off">
-          <button id="lobbyChatSend">Kirim</button>
+        <!-- Player List Column -->
+        <div class="lobby-col">
+          <div class="lobby-section-label">
+            PEMAIN (<span id="lobbyPlayerCount">0</span>/<span id="lobbyMaxPlayers">8</span>)
+          </div>
+          <div class="lobby-player-list" id="lobbyPlayerList">
+            <div class="lobby-player-empty">⏳ Menunggu pemain...</div>
+          </div>
         </div>
-      </div>
+
+        <!-- Right Column: Host Settings + Chat -->
+        <div class="lobby-col">
+          <!--
+            ★ v8.0: Host Settings Card (statik di HTML).
+            Digunakan sebagai referensi oleh initLobbyButtons() (wireup hostSettingsToggle,
+            hostApplySettingsBtn, hs-mode-btn, hs-gamemode-btn).
+            Visibility dikelola oleh updateLobbyHostUI() + style="display:none" default.
+            CATATAN: injectHostSettingsPanel() di game.js JUGA menginjeksi panel terpisah
+            di lobbyHostActions — card ini untuk non-host settings yang sudah tersedia.
+          -->
+          <div id="lobbyHostSettings" class="host-settings-card" style="display:none">
+            <div class="host-settings-toggle" id="hostSettingsToggle">
+              ⚙️ PENGATURAN ROOM <span class="toggle-arrow">▼</span>
+            </div>
+            <div class="host-settings-body" id="hostSettingsBody" style="display:none">
+              <div class="hs-row">
+                <label class="hs-label">Nama Room</label>
+                <input id="hostSettingRoomName" type="text" maxlength="20" placeholder="Nama room..." class="hs-input">
+              </div>
+              <div class="hs-row">
+                <label class="hs-label">Maks Pemain</label>
+                <input id="hostSettingMaxPlayers" type="number" min="1" max="8" value="8" class="hs-input small">
+              </div>
+              <div class="hs-row">
+                <label class="hs-label">Difficulty</label>
+                <div class="btn-group-sm">
+                  <button class="hs-mode-btn active" data-mode="easy">EASY</button>
+                  <button class="hs-mode-btn" data-mode="medium">MED</button>
+                  <button class="hs-mode-btn" data-mode="hard">HARD</button>
+                  <button class="hs-mode-btn" data-mode="boss">BOSS</button>
+                </div>
+              </div>
+              <div class="hs-row">
+                <label class="hs-label">Game Mode</label>
+                <div class="btn-group-sm">
+                  <button class="hs-gamemode-btn active" data-gamemode="normal">🎮 Normal</button>
+                  <button class="hs-gamemode-btn" data-gamemode="boss">👹 Boss</button>
+                </div>
+              </div>
+              <div class="hs-row">
+                <label class="hs-label">Privat</label>
+                <label class="toggle-switch small">
+                  <input type="checkbox" id="hostSettingPrivate">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="hs-row">
+                <label class="hs-label">Kunci Room</label>
+                <label class="toggle-switch small">
+                  <input type="checkbox" id="hostSettingLocked">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <button class="hs-apply-btn" id="hostApplySettingsBtn">✅ Terapkan Pengaturan</button>
+            </div>
+          </div>
+
+          <!-- Lobby Chat -->
+          <div class="lobby-chat-section">
+            <div class="lobby-section-label">💬 LOBBY CHAT</div>
+            <div class="lobby-chat-messages" id="lobbyChatMessages"></div>
+            <div class="lobby-chat-input-row">
+              <input id="lobbyChatInput" type="text" maxlength="80" placeholder="Tulis pesan..." autocomplete="off">
+              <button id="lobbyChatSend">▶</button>
+            </div>
+          </div>
+        </div>
+      </div><!-- /.lobby-main-grid -->
 
       <!-- Action Buttons -->
       <div class="lobby-actions">
-        <!-- Host buttons -->
+        <!-- Host actions (injectHostSettingsPanel() akan sisipkan panel di sini) -->
         <div id="lobbyHostActions" style="display:none">
-          <div class="lobby-status-hint" id="lobbyReadyHint">Menunggu pemain siap...</div>
+          <div class="lobby-ready-hint" id="lobbyReadyHint">
+            <span class="rh-dot"></span>
+            <!--
+              ★ v8.0 FIX: id="lobbyReadyHintText" — digunakan oleh lobbyUpdate handler
+              di game.js untuk update teks "Menunggu X pemain siap..." / "✅ Semua siap!".
+              Sebelumnya ID ini tidak konsisten antara HTML dan JS.
+            -->
+            <span id="lobbyReadyHintText">Menunggu pemain siap...</span>
+          </div>
           <button id="lobbyStartBtn" class="lobby-start-btn" disabled>▶ MULAI PERTANDINGAN</button>
         </div>
-        <!-- Guest buttons -->
+
+        <!-- Guest actions -->
         <div id="lobbyGuestActions">
-          <button id="lobbyReadyBtn" class="lobby-ready-btn">✅ SIAP</button>
-          <div class="lobby-status-hint" id="lobbyGuestHint">Tekan SIAP saat kamu sudah siap bermain</div>
+          <button id="lobbyReadyBtn" class="lobby-ready-btn">✅ SIAP BERMAIN</button>
+          <div class="lobby-ready-hint">
+            <span class="rh-dot idle"></span>
+            <span>Tekan SIAP saat kamu sudah siap</span>
+          </div>
         </div>
+
         <button id="lobbyLeaveBtn" class="lobby-leave-btn">🚪 Keluar dari Lobby</button>
       </div>
 
-      <!-- Countdown Overlay (shown when match is starting) -->
+      <!-- Countdown Overlay (ditampilkan oleh showLobbyCountdown()) -->
       <div id="lobbyCountdown" class="lobby-countdown hidden">
         <div class="lcd-inner">
           <div class="lcd-label">MATCH STARTING</div>
+          <!--
+            ★ v8.0 FIX: numEl di-reset animasi dulu sebelum set angka baru
+            (void numEl.offsetHeight force-reflow) — sudah ditangani di game.js.
+          -->
           <div class="lcd-number" id="lobbyCountdownNum">3</div>
-          <div class="lcd-sub">Bersiap...</div>
+          <div class="lcd-sub">Bersiap-siap...</div>
         </div>
       </div>
 
-    </div>
-  </div>
-  </div>
+    </div><!-- /.lobby-container -->
+  </div><!-- /#lobbyScreen -->
 
-  <!-- ══════════════════════════════════════════════════════ -->
-  <!--  GAME WRAPPER                                          -->
-  <!-- ══════════════════════════════════════════════════════ -->
+  <!-- ════════════════════════════════════════════════════════════════ -->
+  <!--  GAME WRAPPER                                                  -->
+  <!-- ════════════════════════════════════════════════════════════════ -->
   <div id="gameWrapper">
 
     <div id="headerBar">
@@ -283,59 +468,85 @@
       </div>
       <div class="header-right">
         <div class="best-score-tag">🏆 <span id="bestDisplay">0</span></div>
-        <div style="display: flex; gap: 6px; align-items: center; margin-top: 4px; justify-content: flex-end;">
+        <div style="display:flex;gap:6px;align-items:center;margin-top:4px;justify-content:flex-end">
           <div class="mode-tag" id="modeTag">SINGLE</div>
-          <!-- ★ NEW: Mute button in header -->
-          <button id="btnMute" onclick="toggleMuteInGame()" title="Mute/Unmute Audio" style="background: rgba(255,255,255,0.05); color: var(--clr-text); border: 1px solid rgba(255,255,255,0.1); font-size: 0.85rem; padding: 2px 6px; border-radius: 3px; cursor: pointer; transition: all 0.15s;">🔊</button>
-          <button id="btnHeaderExit" onclick="triggerManualExitConfirmation()" style="background: var(--clr-red); color: #fff; border: none; font-family: var(--font-mono); font-size: 0.62rem; padding: 2px 6px; border-radius: 3px; cursor: pointer; font-weight: bold; letter-spacing: 1px; box-shadow: 0 0 8px rgba(255, 59, 92, 0.3); transition: transform 0.1s;">✕ QUIT</button>
+          <!--
+            ★ v8.0 NEW: Latency Indicator — diinjeksi di sebelah #modeTag
+            oleh updateLatencyIndicator() di game.js saat ping pertama diterima.
+            Elemen: <span id="latencyIndicator"><span class="lat-dot"></span><span id="latVal">—ms</span></span>
+            Tidak perlu ditulis di HTML karena game.js membuatnya secara dinamis.
+          -->
+          <!--
+            ★ v8.0 FIX: toggleMuteInGame() & triggerManualExitConfirmation() didefinisikan
+            di game.js v8.0 sebagai global functions (bukan di inline script lagi).
+            Inline script di bawah tetap ada sebagai fallback safety.
+          -->
+          <button id="btnMute" onclick="toggleMuteInGame()" title="Mute/Unmute">🔊</button>
+          <button id="btnHeaderExit" onclick="triggerManualExitConfirmation()">✕ QUIT</button>
         </div>
       </div>
     </div>
 
     <div id="notifBar"><span id="notifText"></span></div>
 
-    <canvas id="game" width="500" height="500"></canvas>
+    <!--
+      ★ v8.0 NEW: Power-Up Bar — diinjeksi oleh IIFE injectPowerUpBar() di game.js
+      tepat setelah #notifBar menggunakan notifBar.after(bar).
+      Tidak perlu ditulis di HTML; game.js membuatnya dengan id="powerUpBar".
+    -->
 
-    <!-- ★ NEW: Combo & streak display overlay on canvas -->
+    <canvas id="game" width="500" height="500"></canvas>
     <div id="comboDisplay" class="combo-display"></div>
 
+    <!-- D-Pad controls (mobile) -->
     <div id="dpad">
       <div></div>
-      <button id="btn-up" aria-label="Atas">▲</button>
+      <button id="btn-up"    aria-label="Atas">▲</button>
       <div></div>
-      <button id="btn-left" aria-label="Kiri">◀</button>
-      <button id="btn-down" aria-label="Bawah">▼</button>
+      <button id="btn-left"  aria-label="Kiri">◀</button>
+      <button id="btn-down"  aria-label="Bawah">▼</button>
       <button id="btn-right" aria-label="Kanan">▶</button>
     </div>
 
     <div id="pauseIndicator">⏸ PAUSED</div>
 
+    <!-- Info bar at the bottom -->
     <div id="infoBar">
       <div class="info-section">
         <span class="info-title">🎮 KONTROL</span>
         <span class="info-item"><kbd>↑↓←→</kbd> Gerak</span>
         <span class="info-item"><kbd>SPACE</kbd> Pause</span>
-        <span class="info-item"><kbd>ESC / QUIT</kbd> Menu Utama</span>
+        <span class="info-item"><kbd>ESC</kbd> Menu</span>
         <span class="info-item"><kbd>M</kbd> Mute</span>
         <span class="info-item"><kbd>TAB</kbd> Quick Chat</span>
+        <!-- ★ v8.0: Kontrol Boss (tekan B saat mode Boss aktif) -->
+        <span class="info-item"><kbd>B</kbd> Hit Boss</span>
       </div>
       <div class="info-divider"></div>
       <div class="info-section">
-        <span class="info-title">🍎 ENTITAS ITEM</span>
+        <span class="info-title">🍎 ITEM</span>
         <span class="info-item"><span class="dot apple"></span> Apel +1</span>
         <span class="info-item"><span class="dot gold"></span> Emas +3</span>
         <span class="info-item"><span class="dot banana"></span> Pisang +5</span>
-        <span class="info-item"><span class="dot poop"></span> Kotoran -3 (60 dtk)</span>
+        <span class="info-item"><span class="dot poop"></span> Kotoran -3</span>
       </div>
       <div class="info-divider"></div>
       <div class="info-section">
-        <span class="info-title">📋 REGULASI SERVER</span>
-        <span class="info-item">Otoritas: <strong>Pure Server-Authoritative</strong></span>
-        <span class="info-item">Combo: <strong>3 Makan Beruntun = Bonus Poin</strong></span>
+        <span class="info-title">⚡ POWER-UP</span>
+        <span class="info-item">🛡 Shield 8dtk</span>
+        <span class="info-item">✖2 Double Score 7dtk</span>
+        <span class="info-item">🐌 Slow Motion 5dtk</span>
+      </div>
+      <div class="info-divider"></div>
+      <div class="info-section">
+        <span class="info-title">📋 INFO</span>
+        <span class="info-item">Boss: Multi only</span>
+        <span class="info-item">Ranked: RP System</span>
+        <span class="info-item">Server-Authoritative</span>
       </div>
     </div>
 
-  </div>
+  </div><!-- /#gameWrapper -->
 
   <!-- Level Transition Panel -->
   <div id="levelPanel">
@@ -344,54 +555,103 @@
       <h2 id="levelText"></h2>
       <p id="scoreText"></p>
       <div id="levelStars"></div>
-      <div style="margin-top: 20px;">
+      <div style="margin-top:20px">
         <button id="nextLevelBtn">▶ Lanjut Level</button>
       </div>
     </div>
   </div>
 
-  <!-- Leaderboard Panel -->
+  <!-- Leaderboard Panel (multiplayer) -->
   <div id="leaderboardPanel">
-    <div class="lb-header">📊 LIVE LEADERBOARD</div>
+    <div class="lb-header">📊 LEADERBOARD</div>
     <div id="lbList"></div>
     <div class="lb-footer" id="lbStatus">Single Player Mode</div>
+    <!--
+      ★ v8.0 NEW: Quick Chat button — diinjeksi oleh injectQuickChatButton() di game.js
+      ke dalam #leaderboardPanel saat game multiplayer dimulai.
+      Tidak perlu ditulis di HTML; JS membuat <button id="btnQuickChat" class="qc-open-btn">.
+    -->
   </div>
 
-  <!-- Ghost Saboteur -->
+  <!--
+    ★ v8.0 FIX: Ghost / Saboteur Button.
+    - id="ghostBtn"       → container utama (display:none by default)
+    - id="ghostAttackBtn" → DIHAPUS (tidak ada di JS v8.0)
+    - v8.0 menggunakan event listener pada ghostBtn container itu sendiri
+      via initGhostButton() yang listen click pada #ghostBtn langsung.
+    - Target dipilih otomatis dari window._crownBoard (leaderboard aktif).
+  -->
   <div id="ghostBtn" style="display:none">
-    <button id="ghostAttackBtn" title="Injeksi Kotoran Poop Ke Grid Target Lawan">👻 SABOTASE</button>
-    <select id="ghostTargetSelect"></select>
+    <button class="ghost-attack-btn" title="Injeksi Kotoran ke Lawan Acak (Saboteur)">
+      👻 SABOTASE
+    </button>
+    <div style="font-size:0.6rem;color:rgba(200,212,232,0.5);text-align:center;margin-top:2px">
+      target otomatis
+    </div>
   </div>
 
+  <!--
+    ★ v8.0 SAFETY SCRIPT:
+    Fungsi-fungsi ini juga didefinisikan di game.js v8.0 sebagai proper global functions.
+    Script inline ini sebagai fallback jika game.js belum selesai load saat tombol HTML diklik.
+    Setelah game.js load, implementasi di game.js akan override definisi ini.
+  -->
   <script>
-    // ── Helper: Salin Room Code ──────────────────────────────────
-    function copyRoomCodeToClipboard() {
-      const codeText = document.getElementById("roomCodeText").textContent;
-      if (codeText && codeText !== "——" && codeText !== "CLOUD") {
-        navigator.clipboard.writeText(codeText).then(() => {
-          const btn = document.getElementById("copyRoomCode");
-          btn.textContent = "✓ Tersalin";
-          btn.classList.add("copied");
-          setTimeout(() => { btn.textContent = "📋 Salin"; btn.classList.remove("copied"); }, 2000);
-        }).catch(() => {});
-      }
-    }
+    // ── Fallback definitions — akan di-override oleh game.js setelah load ──
 
-    // ── Helper: Konfirmasi Keluar ────────────────────────────────
-    function triggerManualExitConfirmation() {
-      if (typeof togglePause === "function" && currentState === "STATE_PLAYING") togglePause();
-      if (confirm("Keluar dari sesi permainan aktif dan kembali ke menu utama?")) {
-        if (typeof exitToMainMenu === "function") exitToMainMenu();
-      }
-    }
-
-    // ── Helper: Mute Toggle dari Header ────────────────────────
     function toggleMuteInGame() {
       if (typeof toggleGlobalMute === "function") toggleGlobalMute();
     }
+
+    function triggerManualExitConfirmation() {
+      // Gunakan nilai string STATE karena konstanta STATE belum tersedia sebelum game.js load
+      if (typeof currentState !== "undefined" && currentState === "STATE_PLAYING") {
+        if (typeof togglePause === "function") togglePause();
+      }
+      setTimeout(function() {
+        if (confirm("Keluar dari sesi permainan aktif dan kembali ke menu utama?")) {
+          if (typeof exitToMainMenu === "function") exitToMainMenu();
+        } else if (typeof currentState !== "undefined" && currentState === "STATE_PAUSED") {
+          if (typeof togglePause === "function") togglePause();
+        }
+      }, 50);
+    }
+
+    // Fallback copyRoomCodeToClipboard (kompatibilitas ke belakang)
+    function copyRoomCodeToClipboard() {
+      var codeText = document.getElementById("lobbyRoomCode")
+                  || document.getElementById("roomCodeText");
+      var text = codeText ? codeText.textContent : null;
+      if (text && text !== "——") {
+        navigator.clipboard.writeText(text).then(function() {
+          var btn = document.getElementById("lobbyCopyBtn");
+          if (btn) { btn.textContent = "✅"; setTimeout(function(){ btn.textContent = "📋"; }, 1500); }
+        }).catch(function(){});
+      }
+    }
+
+    // ★ v8.0: Wire openRoomBrowserBtn via event listener (bukan onclick inline)
+    // Dijalankan segera saat script ini diparse — sebelum game.js load.
+    // Setelah game.js load, game.js sudah handle ini juga melalui DOMContentLoaded-nya sendiri.
+    document.addEventListener("DOMContentLoaded", function() {
+      var btn = document.getElementById("openRoomBrowserBtn");
+      if (btn && !btn._wired) {
+        btn._wired = true;
+        btn.addEventListener("click", function() {
+          if (typeof fetchAndShowRoomBrowser === "function") {
+            fetchAndShowRoomBrowser();
+            // Tampilkan auto-refresh badge saat panel dibuka
+            var badge = document.getElementById("rbAutoRefreshBadge");
+            if (badge) badge.style.display = "";
+          }
+        });
+      }
+    });
   </script>
 
+  <!-- Socket.IO client library -->
   <script src="/socket.io/socket.io.js" onerror="window._socketMissing=true"></script>
+  <!-- Main game logic (v8.0) -->
   <script src="game.js"></script>
 </body>
 </html>

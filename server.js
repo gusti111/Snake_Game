@@ -1,512 +1,1265 @@
 // ============================================================================
-// server.js — Snake Arcade v8.0 Backend (Lobby System + Public Cloud Ready)
-// ✦ Lobby System v1.0  — FSM: WAITING → READY_CHECK → PLAYING → FINISHED
-// ✦ Room Persistence   — Auto host-migration saat host disconnect
-// ✦ Reconnect Window   — 20 detik grace period sebelum slot dilepas
-// ✦ Cloud-Ready CORS   — Berjalan di Railway / Render / Fly.io
-// Grafika Komputer · PjBL · D3 Teknik Informatika POLNEP
+// server.js — Snake Arcade v9.0 Backend · BUG FIX EDITION
+//
+// ── SEMUA BUG DIPERBAIKI ──
+//  ✦ FIX: quickJoin sekarang langsung lakukan joinRoom/createRoom di server
+//         (tidak emit "quickJoinRedirect"/"quickJoinCreateRoom" lagi, 
+//          karena client tidak ada handler untuk itu)
+//  ✦ FIX: "joinedRoom" event seragam untuk semua join success (hapus roomApproved duplikat)
+//  ✦ FIX: Ping loop — server hanya terima "pongCheck" dari client, tidak kirim pingCheck 
+//         setiap update (sudah ada interval PING_INTERVAL_MS)
+//  ✦ FIX: updateRoomSettings — gameMode & teamMode sekarang diproses dengan benar
+//  ✦ FIX: broadcastLobby emit ke room berjalan dengan benar
+//  ✦ FIX: startMatch — validasi semua pemain siap lebih akurat
+//  ✦ FIX: leaveRoom cleanup tidak crash jika player undefined
+//  ✦ FIX: Ghost timer tidak set ulang jika sudah aktif
+//  ✦ FIX: Room browser — filter room dengan benar
+//  ✦ FIX: Reconnect — room players array update benar
+//  ✦ FIX: CORS & Socket.io transport config lebih robust
 // ============================================================================
 
-const express = require("express");
-const http    = require("http");
-const path    = require("path");
-const os      = require("os");
+"use strict";
+
+const express  = require("express");
+const http     = require("http");
+const path     = require("path");
+const os       = require("os");
+const crypto   = require("crypto");
 const { Server } = require("socket.io");
 
-let qrcode;
-try { qrcode = require("qrcode-terminal"); } catch(e) { qrcode = null; }
+// ── Optional: SQLite (graceful fallback ke RAM) ───────────────────────────
+let db = null;
+try {
+  const Database = require("better-sqlite3");
+  db = new Database("arcade.db");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS players (
+      id       TEXT PRIMARY KEY,
+      username TEXT,
+      rp       INTEGER DEFAULT 1000,
+      tier     TEXT DEFAULT 'Bronze',
+      total_xp INTEGER DEFAULT 0,
+      wins     INTEGER DEFAULT 0,
+      games    INTEGER DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS match_history (
+      id         TEXT PRIMARY KEY,
+      room_id    TEXT,
+      player_ids TEXT,
+      scores     TEXT,
+      winner_id  TEXT,
+      mode       TEXT,
+      duration_s INTEGER,
+      played_at  INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS global_scores (
+      player_id   TEXT PRIMARY KEY,
+      username    TEXT,
+      best_score  INTEGER DEFAULT 0,
+      updated_at  INTEGER
+    );
+  `);
+  console.log("[DB] SQLite aktif: arcade.db");
+} catch {
+  console.warn("[DB] better-sqlite3 tidak ditemukan → Mode RAM (Ranked + History disabled)");
+}
 
+// ── Optional: QR Code ─────────────────────────────────────────────────────
+let qrcode = null;
+try { qrcode = require("qrcode-terminal"); } catch {}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CONFIG
+// ════════════════════════════════════════════════════════════════════════════
+const PORT               = process.env.PORT || 3000;
+const IS_CLOUD           = !!process.env.VERCEL || !!process.env.RENDER || !!process.env.RAILWAY_ENVIRONMENT;
+const RECONNECT_GRACE_MS = 30_000;
+const ROOM_GHOST_TTL_MS  = 300_000;
+const CHAT_COOLDOWN_MS   = 2_000;
+const PING_INTERVAL_MS   = 5_000;
+const MAX_SPECTATORS     = 10;
+
+// ── Seasonal Event ────────────────────────────────────────────────────────
+function getCurrentSeasonalEvent() {
+  const now = new Date();
+  const m   = now.getMonth() + 1;
+  const d   = now.getDate();
+  if (m === 3 || m === 4) return { id: "ramadan",     name: "🌙 Bulan Ramadan", multiplier: 1.5, color: "#ffd700" };
+  if (m === 12)            return { id: "christmas",   name: "🎄 Natal & Tahun Baru", multiplier: 1.3, color: "#00f5c4" };
+  if (m === 8 && d >= 17 && d <= 25) return { id: "independence", name: "🇮🇩 HUT RI", multiplier: 1.7, color: "#ff3b5c" };
+  const week   = Math.floor((now.getTime() / (7 * 24 * 3600000))) % 4;
+  const weekly = [
+    { id: "speed_week",  name: "⚡ Speed Week",  multiplier: 1.2, color: "#ff8c00" },
+    { id: "combo_week",  name: "🔥 Combo Week",  multiplier: 1.2, color: "#b066ff" },
+    { id: "boss_week",   name: "👹 Boss Week",   multiplier: 1.4, color: "#ff3b5c" },
+    { id: "golden_week", name: "✨ Golden Week", multiplier: 1.3, color: "#ffd700" },
+  ];
+  return weekly[week];
+}
+
+const QUICK_CHAT_MESSAGES = [
+  "GG!", "Nice move!", "Siap!", "Follow me!", "Waspada!", "Aku di kanan!",
+  "BOSS mau serang!", "Kumpul sini!", "Mantap!", "Ayo semangat!",
+  "Lawan Boss bareng!", "Hati-hati poop!",
+];
+
+// LAN IPs — Filter interface virtual, hanya tampilkan jaringan fisik yang berguna
+// Subnet yang difilter:
+//   192.168.56.x  → VirtualBox Host-Only Adapter
+//   192.168.99.x  → Docker / VirtualBox (alternatif)
+//   172.17.x.x    → Docker bridge default
+//   169.254.x.x   → APIPA / link-local (tidak ada DHCP)
+const VIRTUAL_SUBNET_PREFIXES = [
+  "192.168.56.",   // VirtualBox Host-Only
+  "192.168.99.",   // Docker / VirtualBox alt
+  "172.17.",       // Docker bridge
+  "172.18.",       // Docker bridge alt
+  "172.19.",       // Docker bridge alt
+  "169.254.",      // APIPA link-local
+];
+
+// Nama interface virtual yang umum (case-insensitive)
+const VIRTUAL_INTERFACE_KEYWORDS = [
+  "virtualbox", "vmware", "vmnet", "vethernet",
+  "docker", "loopback", "pseudo", "tunnel", "tap",
+  "vbox", "hamachi", "vpn",
+];
+
+function isVirtualInterface(name, address) {
+  // Cek berdasarkan prefix subnet
+  for (const prefix of VIRTUAL_SUBNET_PREFIXES) {
+    if (address.startsWith(prefix)) return true;
+  }
+  // Cek berdasarkan nama interface
+  const nameLower = name.toLowerCase();
+  for (const keyword of VIRTUAL_INTERFACE_KEYWORDS) {
+    if (nameLower.includes(keyword)) return true;
+  }
+  return false;
+}
+
+function getAllLANIPs() {
+  const nets = os.networkInterfaces();
+  const ips  = [];
+
+  // Prioritas: Wi-Fi / WLAN dulu, lalu Ethernet, lalu lainnya
+  const priority = (name) => {
+    const n = name.toLowerCase();
+    if (n.includes("wi-fi") || n.includes("wifi") || n.includes("wlan") || n.includes("wireless")) return 0;
+    if (n.includes("ethernet") || n.includes("eth") || n.includes("en0") || n.includes("en1"))      return 1;
+    return 2;
+  };
+
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal && !isVirtualInterface(name, net.address)) {
+        ips.push({ ip: net.address, interface: name, priority: priority(name) });
+      }
+    }
+  }
+
+  // Urutkan: Wi-Fi > Ethernet > lainnya
+  ips.sort((a, b) => a.priority - b.priority);
+  return ips;
+}
+
+function getLANIP() {
+  const ips = getAllLANIPs();
+  return ips.length > 0 ? ips[0].ip : "localhost";
+}
+
+const LAN_IP         = getLANIP();
+const ALL_LAN_IPS    = getAllLANIPs();
+const SERVER_LAN_URL = IS_CLOUD
+  ? (process.env.PUBLIC_URL || "https://snake-arcade.up.railway.app")
+  : `http://${LAN_IP}:${PORT}`;
+
+// ════════════════════════════════════════════════════════════════════════════
+//  SETUP EXPRESS + SOCKET.IO
+// ════════════════════════════════════════════════════════════════════════════
 const app    = express();
 const server = http.createServer(app);
 const io     = new Server(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"]
+    origin:      "*",
+    methods:     ["GET", "POST"],
+    credentials: false,
   },
-  pingInterval: 2000,
-  pingTimeout:  8000,
-  transports:   ["websocket", "polling"],
+  pingInterval:  10_000,
+  pingTimeout:   25_000,
+  transports:    ["polling", "websocket"],
+  allowUpgrades: true,
 });
 
+app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
-app.get("/health", (req, res) => res.json({ status: "ok", rooms: rooms.size, players: players.size }));
+app.get("/", (_, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-// ── Constants ──────────────────────────────────────────────────────────────
-const MAX_PLAYERS_PER_ROOM = 8;
-const RECONNECT_GRACE_MS   = 20000;
-const CHAT_COOLDOWN_MS     = 2500;
+// ── Health ────────────────────────────────────────────────────────────────
+app.get("/health", (_, res) => res.json({
+  status: "ok", version: "9.0.0",
+  rooms: rooms.size, players: players.size,
+  uptime: Math.floor(process.uptime()), dbActive: !!db,
+  seasonalEvent: getCurrentSeasonalEvent(),
+}));
 
+// ── Room Browser API ──────────────────────────────────────────────────────
+app.get("/api/rooms", (_, res) => {
+  const list = [];
+  rooms.forEach(room => {
+    if (!room.settings.isPrivate && room.state === LOBBY_STATE.WAITING) {
+      const host = players.get(room.hostId);
+      list.push({
+        id:          room.id,
+        name:        room.settings.name,
+        playerCount: room.players.length,
+        maxPlayers:  room.settings.maxPlayers,
+        mode:        room.settings.mode,
+        gameMode:    room.settings.gameMode || "normal",
+        teamMode:    room.settings.teamMode || false,
+        createdAt:   room.createdAt,
+        hostName:    host?.username ?? "—",
+        isFull:      room.players.length >= room.settings.maxPlayers,
+        avgPing:     0,
+      });
+    }
+  });
+  list.sort((a, b) => b.playerCount - a.playerCount);
+  res.json(list);
+});
+
+// ── Server Info API ───────────────────────────────────────────────────────
+app.get("/api/server-info", (_, res) => {
+  res.json({
+    version: "9.0.0",
+    phase:   "Bug Fix Edition",
+    isCloud: IS_CLOUD,
+    url:     SERVER_LAN_URL,
+    rooms:   rooms.size,
+    players: players.size,
+    uptime:  Math.floor(process.uptime()),
+    dbActive: !!db,
+    seasonalEvent: getCurrentSeasonalEvent(),
+    features: [
+      "lobby-v2", "token-reconnect", "room-browser", "quick-join",
+      "ping-rtt", "kick-player", "host-migration", "ghost-timer",
+      "boss-engine", "ranked-elo", "quick-chat", "lobby-chat",
+      "match-summary", "host-lock-room", "spectator-mode",
+      "match-history", "seasonal-events", "team-mode", "vote-kick",
+    ],
+  });
+});
+
+// ── Global Leaderboard ────────────────────────────────────────────────────
+app.get("/api/leaderboard", (_, res) => {
+  if (!db) { res.json({ entries: [], message: "Database tidak aktif." }); return; }
+  try {
+    const rows = db.prepare(`
+      SELECT gs.player_id, gs.username, gs.best_score,
+             p.rp, p.tier, p.wins, p.games
+      FROM global_scores gs
+      LEFT JOIN players p ON p.id = gs.player_id
+      ORDER BY gs.best_score DESC LIMIT 100
+    `).all();
+    res.json({ entries: rows, event: getCurrentSeasonalEvent() });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Player Profile API ────────────────────────────────────────────────────
+app.get("/api/player/:id", (req, res) => {
+  if (!db) { res.json({ message: "DB tidak aktif" }); return; }
+  try {
+    const p  = db.prepare("SELECT * FROM players WHERE id = ?").get(req.params.id);
+    const gs = db.prepare("SELECT best_score FROM global_scores WHERE player_id = ?").get(req.params.id);
+    const mh = db.prepare("SELECT * FROM match_history WHERE player_ids LIKE ? ORDER BY played_at DESC LIMIT 20").all(`%${req.params.id}%`);
+    res.json({ profile: p || null, bestScore: gs?.best_score || 0, matchHistory: mh });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  BOSS ENGINE
+// ════════════════════════════════════════════════════════════════════════════
+class BossEngine {
+  constructor(roomId) {
+    this.roomId  = roomId;
+    this.maxHp   = 15_000;
+    this.hp      = this.maxHp;
+    this.x       = 250; this.y = 250;
+    this.zones   = [];
+    this._loop   = null;
+    this.active  = false;
+    this._tick_n = 0;
+    this.lootTable = ["doublescr", "shield", "magnet", "slowmotion", "banana"];
+  }
+
+  get phase() {
+    const pct = this.hp / this.maxHp;
+    if (pct < 0.25) return 3;
+    if (pct < 0.50) return 2;
+    return 1;
+  }
+
+  start() {
+    this.active = true;
+    this.hp     = this.maxHp;
+    this._loop  = setInterval(() => this._tick(), 100);
+    console.log(`[Boss] Room ${this.roomId}: Boss Engine started`);
+  }
+
+  stop() {
+    this.active = false;
+    if (this._loop) { clearInterval(this._loop); this._loop = null; }
+  }
+
+  applyDamage(amount) {
+    if (!this.active) return;
+    const prevPhase = this.phase;
+    this.hp = Math.max(0, this.hp - amount);
+    const nowPhase = this.phase;
+    if (prevPhase !== nowPhase) {
+      const msg = nowPhase === 3 ? "💢 BOSS BERSERK!" : "😡 BOSS ENRAGED!";
+      io.to(this.roomId).emit("bossPhaseChange", { phase: nowPhase, message: msg });
+    }
+    if (this.hp <= 0) { this.stop(); this._dropLoot(); }
+  }
+
+  _dropLoot() {
+    const loot = this.lootTable[Math.floor(Math.random() * this.lootTable.length)];
+    io.to(this.roomId).emit("bossLootDrop", {
+      type: loot,
+      message: `🎁 Boss mati! Semua dapat ${loot}!`,
+    });
+  }
+
+  _tick() {
+    if (!this.active || this.hp <= 0) return;
+    const now   = Date.now();
+    const phase = this.phase;
+    this._tick_n++;
+    this.zones = this.zones.filter(z => z.expiresAt > now);
+
+    const attackChance = phase === 3 ? 0.18 : phase === 2 ? 0.12 : 0.08;
+    if (Math.random() < attackChance) {
+      const room = rooms.get(this.roomId);
+      if (room) {
+        let cx = 0, cy = 0, cnt = 0;
+        room.players.forEach(sid => {
+          const p = players.get(sid);
+          if (p?.status === "alive" && p.lastX != null) {
+            const lead = phase === 3 ? 6 : phase === 2 ? 4 : 3;
+            cx += p.lastX + (p.dx || 0) * lead;
+            cy += p.lastY + (p.dy || 0) * lead;
+            cnt++;
+          }
+        });
+        if (cnt > 0) {
+          const radius   = phase === 3 ? 80 : phase === 2 ? 70 : 60;
+          const duration = phase === 3 ? 1500 : 2000;
+          this.zones.push({
+            id:        crypto.randomBytes(4).toString("hex"),
+            x:         Math.max(0, Math.min(500, cx / cnt + (Math.random() * 60 - 30))),
+            y:         Math.max(0, Math.min(500, cy / cnt + (Math.random() * 60 - 30))),
+            radius,
+            expiresAt: now + duration,
+          });
+        }
+      }
+    }
+
+    if (this._tick_n % 20 === 0) {
+      this.x += (Math.random() - 0.5) * 40;
+      this.y += (Math.random() - 0.5) * 40;
+      this.x  = Math.max(50, Math.min(450, this.x));
+      this.y  = Math.max(50, Math.min(450, this.y));
+    }
+
+    const bossSync = {
+      hp: this.hp, maxHp: this.maxHp,
+      x: this.x, y: this.y, phase,
+      zones: this.zones.map(z => ({ x: z.x, y: z.y, radius: z.radius })),
+    };
+    io.to(this.roomId).volatile.emit("boss_sync", bossSync);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  RANKED ELO
+// ════════════════════════════════════════════════════════════════════════════
+function calculateElo(playersArr) {
+  if (!db || playersArr.length < 2) return;
+  let totalRp = 0;
+  const data  = [];
+  for (const p of playersArr) {
+    const row = db.prepare("SELECT rp FROM players WHERE id = ?").get(p.id);
+    const rp  = row?.rp ?? 1000;
+    totalRp  += rp;
+    data.push({ id: p.id, username: p.username, rp, score: p.score || 0 });
+  }
+  const avgRp    = totalRp / data.length;
+  const avgScore = data.reduce((s, p) => s + p.score, 0) / data.length;
+  for (const p of data) {
+    const expected = 1 / (1 + Math.pow(10, (avgRp - p.rp) / 400));
+    const actual   = p.score > avgScore ? 1 : 0;
+    const newRp    = Math.max(0, Math.round(p.rp + 32 * (actual - expected)));
+    let tier = "Bronze";
+    if (newRp >= 2200)      tier = "Serpent God";
+    else if (newRp >= 1800) tier = "Anaconda";
+    else if (newRp >= 1400) tier = "Cobra";
+    else if (newRp >= 1200) tier = "Viper";
+    else if (newRp >= 1000) tier = "Striker";
+    else if (newRp >= 800)  tier = "Hunter";
+    else if (newRp >= 600)  tier = "Explorer";
+    db.prepare(`
+      INSERT INTO players (id, username, rp, tier) VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET rp=excluded.rp, tier=excluded.tier, username=excluded.username
+    `).run(p.id, p.username, newRp, tier);
+  }
+}
+
+function saveMatchHistory(room, winner) {
+  if (!db) return;
+  try {
+    const playerIds = room.players.join(",");
+    const scores    = JSON.stringify(
+      Object.fromEntries(room.players.map(sid => [sid, players.get(sid)?.score || 0]))
+    );
+    db.prepare(`
+      INSERT INTO match_history (id, room_id, player_ids, scores, winner_id, mode, duration_s, played_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      crypto.randomBytes(8).toString("hex"),
+      room.id, playerIds, scores,
+      winner?.id || null,
+      room.settings.mode,
+      Math.floor((Date.now() - (room.startedAt || Date.now())) / 1000),
+      Date.now()
+    );
+  } catch (err) { console.warn("[DB] saveMatchHistory error:", err.message); }
+}
+
+function updateGlobalScore(player) {
+  if (!db || !player) return;
+  try {
+    const existing = db.prepare("SELECT best_score FROM global_scores WHERE player_id = ?").get(player.id);
+    if (!existing || player.score > existing.best_score) {
+      db.prepare(`
+        INSERT INTO global_scores (player_id, username, best_score, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(player_id) DO UPDATE SET best_score=excluded.best_score, username=excluded.username, updated_at=excluded.updated_at
+      `).run(player.id, player.username, player.score, Date.now());
+    }
+  } catch {}
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  STATE MAPS
+// ════════════════════════════════════════════════════════════════════════════
 const LOBBY_STATE = {
   WAITING:        "WAITING",
-  READY_CHECK:    "READY_CHECK",
   MATCH_STARTING: "MATCH_STARTING",
   PLAYING:        "PLAYING",
   FINISHED:       "FINISHED",
 };
 
-const QUICK_CHAT_MESSAGES = [
-  "GG!", "Nice!", "Nooo!", "Help!", "Watch Out!",
-  "Good Luck!", "I'm Coming!", "😂", "😎", "🔥", "😱", "👑"
-];
-
-// ── In-Memory State ────────────────────────────────────────────────────────
-// rooms: Map<roomId, RoomObject>
-// players: Map<socketId, PlayerObject>
-const rooms   = new Map();
-const players = new Map();
-const chatCooldowns    = new Map();
+const rooms            = new Map();
+const players          = new Map();
+const sessionTokens    = new Map();
 const disconnectTimers = new Map();
+const roomGhostTimers  = new Map();
+const chatCooldowns    = new Map();
+const voteKickMap      = new Map();
 
-// ── Helpers ────────────────────────────────────────────────────────────────
+function emptyStats() {
+  return {
+    applesEaten: 0, goldCollected: 0, bananasCollected: 0,
+    poopHits: 0, highestCombo: 0, powerUpsUsed: 0,
+    maxLevel: 1, saboteurSent: 0, saboteurReceived: 0,
+  };
+}
+
 function generateRoomId() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let id = "";
   for (let i = 0; i < 6; i++) id += chars[Math.floor(Math.random() * chars.length)];
-  return id;
+  return rooms.has(id) ? generateRoomId() : id;
 }
 
-function createRoom(hostSocketId, hostUsername, settings = {}) {
-  let roomId;
-  do { roomId = generateRoomId(); } while (rooms.has(roomId));
-
-  const room = {
-    id:         roomId,
-    hostId:     hostSocketId,
-    state:      LOBBY_STATE.WAITING,
-    settings: {
-      maxPlayers: settings.maxPlayers || MAX_PLAYERS_PER_ROOM,
-      mode:       settings.mode || "easy",
-      name:       settings.name || `${hostUsername}'s Room`,
-    },
-    players:    [],      // list of socketIds
-    createdAt:  Date.now(),
-    startTimer: null,
-  };
-  rooms.set(roomId, room);
-  return room;
-}
+function generateToken() { return crypto.randomBytes(20).toString("hex"); }
 
 function getRoomOf(socketId) {
   const p = players.get(socketId);
-  if (!p || !p.roomId) return null;
-  return rooms.get(p.roomId) || null;
+  return p?.roomId ? rooms.get(p.roomId) : null;
 }
 
+// ── Broadcast Lobby ────────────────────────────────────────────────────────
 function broadcastLobby(room) {
   if (!room) return;
-  const members = room.players.map(sid => {
+  const host       = players.get(room.hostId);
+  const memberList = room.players.map(sid => {
     const p = players.get(sid);
     if (!p) return null;
+    const ping        = p.ping || 0;
+    const pingQuality = ping === 0 ? "unknown" : ping < 50 ? "excellent" : ping < 100 ? "good" : ping < 200 ? "fair" : "poor";
+    let tier = null;
+    if (db) {
+      try { const row = db.prepare("SELECT tier FROM players WHERE id = ?").get(p.id); tier = row?.tier || null; } catch {}
+    }
     return {
-      id:       sid,
-      username: p.username,
-      color:    p.color,
-      mode:     p.mode,
-      isHost:   sid === room.hostId,
-      isReady:  p.isReady,
-      status:   p.status,
+      id:          sid,
+      username:    p.username,
+      color:       p.color,
+      isReady:     p.isReady,
+      isHost:      sid === room.hostId,
+      ping,
+      pingQuality,
+      mode:        p.mode || "easy",
+      status:      p.status || "lobby",
+      tier,
+      team:        p.team || null,
     };
   }).filter(Boolean);
 
   io.to(room.id).emit("lobbyUpdate", {
-    roomId:    room.id,
-    roomName:  room.settings.name,
-    state:     room.state,
-    hostId:    room.hostId,
-    members,
+    roomId:     room.id,
+    roomName:   room.settings.name,
+    hostId:     room.hostId,
+    hostName:   host?.username ?? "—",
+    state:      room.state,
+    members:    memberList,
     maxPlayers: room.settings.maxPlayers,
-    settings:  room.settings,
+    settings:   room.settings,
+    isCloud:    IS_CLOUD,
+    serverUrl:  SERVER_LAN_URL,
+    gameMode:   room.settings.gameMode || "normal",
+    teamMode:   room.settings.teamMode || false,
+    seasonalEvent: getCurrentSeasonalEvent(),
+    features: [
+      "lobby-v2", "token-reconnect", "room-browser", "quick-join",
+      "ping-rtt", "kick-player", "boss-engine", "ranked-elo", "quick-chat",
+      "match-summary", "spectator-mode", "team-mode", "vote-kick",
+      "seasonal-events", "global-leaderboard",
+    ],
   });
 }
 
 function broadcastLeaderboard(room) {
   if (!room) return;
-  const sorted = room.players.map(sid => players.get(sid)).filter(Boolean)
+  const lb = room.players
+    .map(sid => {
+      const p = players.get(sid);
+      return p ? { id: sid, username: p.username, score: p.score || 0, lives: p.lives, status: p.status, color: p.color, team: p.team } : null;
+    })
+    .filter(Boolean)
     .sort((a, b) => b.score - a.score);
 
-  let crownId = null;
-  if (sorted.length >= 2) {
-    const topAlive = sorted.find(p => p.status === "alive");
-    if (topAlive) crownId = topAlive.id;
-  }
-
-  const board = sorted.map(p => ({
-    id:       p.id,
-    username: p.username,
-    score:    p.score,
-    lives:    p.lives,
-    status:   p.status,
-    isCrown:  p.id === crownId,
-    color:    p.color,
-  }));
-
-  io.to(room.id).emit("leaderboardLiveUpdate", { board, crownId });
+  const aliveBoard = lb.filter(p => p.status === "alive");
+  const crownId    = aliveBoard.length > 0 ? aliveBoard[0].id : null;
+  const boardWithCrown = lb.map(p => ({ ...p, isCrown: p.id === crownId }));
+  io.to(room.id).emit("leaderboardLiveUpdate", { board: boardWithCrown, crownId });
 }
 
-function migrateHost(room) {
-  if (!room || room.players.length === 0) return;
-  const newHostId = room.players.find(sid => sid !== room.hostId) || room.players[0];
-  if (!newHostId) return;
-  room.hostId = newHostId;
-  const newHost = players.get(newHostId);
-  if (newHost) {
-    io.to(room.id).emit("hostMigrated", { newHostId, newHostUsername: newHost.username });
-    broadcastLobby(room);
-    console.log(`  [Room ${room.id}] Host migrated to ${newHost.username}`);
-  }
+// ── Session Token Helpers ─────────────────────────────────────────────────
+function saveSessionToken(socketId, roomId) {
+  const token = generateToken();
+  sessionTokens.set(token, { socketId, roomId, ts: Date.now() });
+  const p = players.get(socketId);
+  if (p) io.to(socketId).emit("sessionToken", { token, roomId });
+  return token;
 }
 
 function cleanupRoom(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
-  if (room.startTimer) clearTimeout(room.startTimer);
-  // Kick all remaining players
-  room.players.forEach(sid => {
-    const p = players.get(sid);
-    if (p) {
-      p.roomId = null;
-      p.isReady = false;
-    }
-    io.to(sid).emit("roomClosed", { reason: "Host menutup room atau semua pemain keluar." });
-  });
+  if (room.bossEngine) room.bossEngine.stop();
   rooms.delete(roomId);
-  console.log(`[Room ${roomId}] Dihapus.`);
+  voteKickMap.delete(roomId);
+  console.log(`[Room] ${roomId} dihapus (kosong/timeout)`);
 }
 
-function checkAllReady(room) {
-  if (!room || room.state !== LOBBY_STATE.WAITING) return false;
-  if (room.players.length < 1) return false;
-  return room.players.every(sid => {
-    const p = players.get(sid);
-    return p && (p.isReady || sid === room.hostId);
-  });
+function migrateHost(room) {
+  if (room.players.length === 0) return;
+  const newHostId = room.players[0];
+  room.hostId     = newHostId;
+  const newHost   = players.get(newHostId);
+  if (newHost) newHost.isReady = true;
+  io.to(room.id).emit("hostMigrated", { newHostId, username: newHost?.username ?? "—" });
+  broadcastLobby(room);
+  console.log(`[Room] ${room.id} — Host migrated to ${newHost?.username}`);
 }
 
-// ── LAN IP Detection ───────────────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-let localIP = "localhost";
-const ifaces = os.networkInterfaces();
-for (const dev in ifaces) {
-  const skip = ["vbox","wsl","virtual","docker","vmware","hyper-v"].some(v => dev.toLowerCase().includes(v));
-  if (skip) continue;
-  ifaces[dev].forEach(iface => {
-    if ((iface.family === "IPv4" || iface.family === 4) && !iface.internal) localIP = iface.address;
+// ── Ping RTT interval ─────────────────────────────────────────────────────
+setInterval(() => {
+  const now = Date.now();
+  players.forEach((p, sid) => {
+    const sock = io.sockets.sockets.get(sid);
+    if (sock) sock.emit("pingCheck", { ts: now });
   });
-}
-const SERVER_LAN_URL = process.env.PUBLIC_URL || `http://${localIP}:${PORT}`;
+}, PING_INTERVAL_MS);
 
-// ── Socket.io Event Engine ─────────────────────────────────────────────────
-io.on("connection", (socket) => {
-  console.log(`[+] Connected: ${socket.id}`);
-  socket.emit("serverInfo", {
-    localURL:  SERVER_LAN_URL,
-    localIP,
-    isCloud:   !!process.env.PUBLIC_URL,
-    serverVersion: "8.0",
+// ════════════════════════════════════════════════════════════════════════════
+//  SOCKET.IO EVENT HANDLERS
+// ════════════════════════════════════════════════════════════════════════════
+io.on("connection", socket => {
+  console.log(`[Socket] Connect: ${socket.id}`);
+
+  // ── RTT Ping ─────────────────────────────────────────────────────────
+  // Client kirim pingCheck ke server → server balas pongCheck
+  socket.on("pingCheck", ({ ts }) => {
+    socket.emit("pongCheck", { ts, serverTs: Date.now() });
   });
 
-  // ── CREATE ROOM (Host) ────────────────────────────────────────────────
-  socket.on("createRoom", ({ username, color, mode, roomName }) => {
-    const sanitizedName = (username || "").trim().substring(0, 12) || `Host-${socket.id.slice(0,4)}`;
+  socket.on("pongCheck", ({ ts }) => {
+    // Client balas pongCheck dari server (ping yang server kirim via interval)
+    // Tidak perlu tindakan di server
+  });
 
-    // Jika pemain sudah ada di room lain, keluar dulu
+  socket.on("latencyReport", ({ rtt }) => {
+    const p = players.get(socket.id);
+    if (!p) return;
+    p.ping = Math.max(0, Math.round(rtt));
+    const room = getRoomOf(socket.id);
+    if (room) io.to(room.id).emit("pingUpdate", { id: socket.id, ping: p.ping });
+  });
+
+  // ── Reconnect ─────────────────────────────────────────────────────────
+  socket.on("reconnectWithToken", ({ token, username }) => {
+    const stored = sessionTokens.get(token);
+    if (!stored) {
+      socket.emit("reconnectFailed", { reason: "Token tidak valid atau sudah kedaluwarsa." });
+      return;
+    }
+    if (Date.now() - stored.ts > RECONNECT_GRACE_MS + 5000) {
+      sessionTokens.delete(token);
+      socket.emit("reconnectFailed", { reason: "Token kedaluwarsa." });
+      return;
+    }
+    const room = rooms.get(stored.roomId);
+    if (!room || room.state !== LOBBY_STATE.PLAYING) {
+      sessionTokens.delete(token);
+      socket.emit("reconnectFailed", { reason: "Room tidak ditemukan atau match sudah selesai." });
+      return;
+    }
+
+    const oldTimer = disconnectTimers.get(stored.socketId);
+    if (oldTimer) { clearTimeout(oldTimer); disconnectTimers.delete(stored.socketId); }
+
+    const oldP = players.get(stored.socketId);
+    if (oldP) {
+      players.delete(stored.socketId);
+      oldP.roomId = stored.roomId;
+      oldP.status = "alive";
+      players.set(socket.id, oldP);
+      room.players = room.players.map(sid => sid === stored.socketId ? socket.id : sid);
+    } else {
+      players.set(socket.id, {
+        id: socket.id, username: username || "Reconnected", color: "#00f5c4",
+        roomId: stored.roomId, isReady: true, status: "alive", score: 0,
+        lives: 3, ping: 0, mode: "easy",
+        sessionStats: emptyStats(), lastX: null, lastY: null, dx: 0, dy: 0,
+      });
+      room.players.push(socket.id);
+    }
+
+    sessionTokens.delete(token);
+    socket.join(stored.roomId);
+    socket.emit("reconnectSuccess", {
+      roomId:  stored.roomId,
+      mode:    room.settings.mode,
+      isHost:  room.hostId === socket.id,
+      state:   room.state,
+      players: room.players.map(sid => {
+        const pl = players.get(sid);
+        return pl ? { id: sid, username: pl.username, color: pl.color, mode: pl.mode } : null;
+      }).filter(Boolean),
+    });
+    io.to(stored.roomId).emit("playerReconnected", { id: socket.id, username: players.get(socket.id)?.username });
+    broadcastLeaderboard(room);
+    console.log(`[Reconnect] ${username} reconnected to room ${stored.roomId}`);
+  });
+
+  // ── Create Room ───────────────────────────────────────────────────────
+  socket.on("createRoom", ({ username, color, mode, roomName, isPrivate, gameMode, teamMode }) => {
+    const name = (username || "").trim().substring(0, 12);
+    if (!name) { socket.emit("createRoomError", { message: "Nama tidak boleh kosong." }); return; }
+
+    // Keluar dari room lama jika ada
     const existingRoom = getRoomOf(socket.id);
     if (existingRoom) leaveRoom(socket, existingRoom);
 
-    const room = createRoom(socket.id, sanitizedName, {
-      mode:       mode || "easy",
-      name:       roomName || `${sanitizedName}'s Room`,
-      maxPlayers: MAX_PLAYERS_PER_ROOM,
-    });
-
-    const player = {
-      id:       socket.id,
-      username: sanitizedName,
-      color:    color || "#00f5c4",
-      mode:     mode || "easy",
-      roomId:   room.id,
-      isHost:   true,
-      isReady:  true,   // Host selalu ready
-      status:   "lobby",
-      score:    0,
-      lives:    3,
-      sessionStats: emptyStats(),
+    const roomId = generateRoomId();
+    const room   = {
+      id:         roomId,
+      hostId:     socket.id,
+      players:    [socket.id],
+      spectators: [],
+      state:      LOBBY_STATE.WAITING,
+      bossEngine: null,
+      settings: {
+        name:       (roomName || "").substring(0, 20) || `${name}'s Room`,
+        maxPlayers: 8,
+        mode:       mode || "easy",
+        gameMode:   gameMode || "normal",
+        teamMode:   teamMode || false,
+        isPrivate:  isPrivate || false,
+      },
+      createdAt:  Date.now(),
+      startedAt:  null,
+      isLocked:   false,
     };
-    players.set(socket.id, player);
-    room.players.push(socket.id);
-    socket.join(room.id);
+    rooms.set(roomId, room);
 
-    socket.emit("roomCreated", {
-      roomId:   room.id,
-      roomName: room.settings.name,
-      playerId: socket.id,
+    // Bersihkan ghost timer jika ada
+    if (roomGhostTimers.has(roomId)) {
+      clearTimeout(roomGhostTimers.get(roomId));
+      roomGhostTimers.delete(roomId);
+    }
+
+    players.set(socket.id, {
+      id:           socket.id,
+      username:     name,
+      color:        color || "#00f5c4",
+      roomId,
+      isReady:      true, // host selalu ready
+      status:       "lobby",
+      score:        0,
+      lives:        3,
+      ping:         0,
+      mode:         mode || "easy",
+      sessionStats: emptyStats(),
+      lastX: null, lastY: null, dx: 0, dy: 0,
+      team: teamMode ? "red" : null,
     });
 
+    socket.join(roomId);
+    // FIX: Kirim "joinedRoom" yang konsisten (client listen event ini)
+    socket.emit("joinedRoom", {
+      roomId,
+      roomName:  room.settings.name,
+      isHost:    true,
+      serverUrl: SERVER_LAN_URL,
+      isCloud:   IS_CLOUD,
+      team:      null,
+    });
+    // Juga emit roomCreated untuk backward compat
+    socket.emit("roomCreated", {
+      roomId,
+      roomName:  room.settings.name,
+      isHost:    true,
+      serverUrl: SERVER_LAN_URL,
+      isCloud:   IS_CLOUD,
+    });
     broadcastLobby(room);
-    console.log(`[Room ${room.id}] Created by ${sanitizedName}`);
+    console.log(`[Room] Created: ${roomId} by ${name}`);
   });
 
-  // ── JOIN ROOM ─────────────────────────────────────────────────────────
+  // ── Join Room ─────────────────────────────────────────────────────────
   socket.on("joinRoom", ({ username, color, mode, roomId }) => {
-    const sanitizedName = (username || "").trim().substring(0, 12) || `Pemain-${socket.id.slice(0,4)}`;
+    const name = (username || "").trim().substring(0, 12);
+    if (!name) { socket.emit("joinRoomError", { message: "Nama tidak boleh kosong." }); return; }
 
-    // Legacy support: jika roomId tidak ada, cari room tersedia atau buat baru
-    const targetRoomId = roomId || findAvailableRoom();
+    const normalizedId = (roomId || "").toString().trim().toUpperCase();
+    const room = rooms.get(normalizedId);
 
-    const room = rooms.get(targetRoomId);
     if (!room) {
-      socket.emit("joinError", { code: "ROOM_NOT_FOUND", message: `Room ${targetRoomId} tidak ditemukan.` });
+      socket.emit("joinRoomError", { message: `Room "${normalizedId}" tidak ditemukan. Cek kode room.` });
       return;
     }
     if (room.state !== LOBBY_STATE.WAITING) {
-      socket.emit("joinError", { code: "GAME_IN_PROGRESS", message: "Pertandingan sudah dimulai." });
+      socket.emit("joinRoomError", { message: "Match sudah berjalan. Tidak bisa bergabung." });
+      return;
+    }
+    if (room.isLocked) {
+      socket.emit("joinRoomError", { message: "Room sedang dikunci oleh host." });
       return;
     }
     if (room.players.length >= room.settings.maxPlayers) {
-      socket.emit("joinError", { code: "ROOM_FULL", message: `Room penuh (maks ${room.settings.maxPlayers} pemain).` });
+      socket.emit("joinRoomError", { message: `Room sudah penuh (${room.players.length}/${room.settings.maxPlayers}).` });
+      return;
+    }
+    // Cek apakah sudah ada di room ini
+    if (room.players.includes(socket.id)) {
+      socket.emit("joinRoomError", { message: "Kamu sudah berada di room ini." });
       return;
     }
 
-    // Cek reconnect: apakah socketId lama ada di room ini?
+    // Keluar dari room lama
     const existingRoom = getRoomOf(socket.id);
-    if (existingRoom) leaveRoom(socket, existingRoom);
+    if (existingRoom && existingRoom.id !== normalizedId) leaveRoom(socket, existingRoom);
 
-    const livesMap = { easy: 3, medium: 2, hard: 1 };
-    const player = {
-      id:       socket.id,
-      username: sanitizedName,
-      color:    color || "#00cfff",
-      mode:     mode || room.settings.mode,
-      roomId:   room.id,
-      isHost:   false,
-      isReady:  false,
-      status:   "lobby",
-      score:    0,
-      lives:    livesMap[mode] || 3,
+    // Team assignment jika team mode
+    let team = null;
+    if (room.settings.teamMode) {
+      const redCount  = room.players.filter(sid => players.get(sid)?.team === "red").length;
+      const blueCount = room.players.filter(sid => players.get(sid)?.team === "blue").length;
+      team = redCount <= blueCount ? "red" : "blue";
+    }
+
+    players.set(socket.id, {
+      id:           socket.id,
+      username:     name,
+      color:        color || "#00cfff",
+      roomId:       room.id,
+      isReady:      false,
+      status:       "lobby",
+      score:        0,
+      lives:        3,
+      ping:         0,
+      mode:         mode || "easy",
       sessionStats: emptyStats(),
-    };
-    players.set(socket.id, player);
+      lastX: null, lastY: null, dx: 0, dy: 0,
+      team,
+    });
+
     room.players.push(socket.id);
     socket.join(room.id);
 
-    socket.emit("roomApproved", {
-      roomId:   room.id,
-      roomName: room.settings.name,
-      playerId: socket.id,
-      mode:     player.mode,
-      lives:    player.lives,
-      playerCount: room.players.length,
-      isLobbyMode: true,
+    // FIX: Emit "joinedRoom" event (event yang di-handle client)
+    socket.emit("joinedRoom", {
+      roomId:    room.id,
+      roomName:  room.settings.name,
+      isHost:    false,
+      serverUrl: SERVER_LAN_URL,
+      isCloud:   IS_CLOUD,
+      team,
     });
 
-    io.to(room.id).emit("playerJoined", { username: sanitizedName, count: room.players.length });
+    io.to(room.id).emit("playerJoined", { id: socket.id, username: name, count: room.players.length });
     broadcastLobby(room);
-    console.log(`[Room ${room.id}] ${sanitizedName} bergabung. (${room.players.length}/${room.settings.maxPlayers})`);
+    console.log(`[Room] ${name} joined ${room.id} (${room.players.length}/${room.settings.maxPlayers})`);
   });
 
-  // ── PLAYER SET READY ──────────────────────────────────────────────────
+  // ── Spectator Join ────────────────────────────────────────────────────
+  socket.on("joinSpectator", ({ username, roomId }) => {
+    const name = (username || "Spectator").trim().substring(0, 12);
+    const room = rooms.get((roomId || "").toUpperCase());
+    if (!room) { socket.emit("joinRoomError", { message: "Room tidak ditemukan." }); return; }
+    if ((room.spectators?.length || 0) >= MAX_SPECTATORS) {
+      socket.emit("joinRoomError", { message: "Kapasitas penonton penuh." }); return;
+    }
+    if (!room.spectators) room.spectators = [];
+    room.spectators.push({ id: socket.id, username: name });
+    socket.join(`spec:${room.id}`);
+    socket.emit("spectatorJoined", {
+      roomId: room.id, roomName: room.settings.name,
+      state: room.state, playerCount: room.players.length,
+    });
+    io.to(room.id).emit("spectatorCountUpdate", { count: room.spectators.length });
+    broadcastLeaderboard(room);
+  });
+
+  // ── Player Ready ──────────────────────────────────────────────────────
   socket.on("playerReady", ({ isReady }) => {
-    const p = players.get(socket.id);
-    const room = getRoomOf(socket.id);
-    if (!p || !room) return;
-    if (room.state !== LOBBY_STATE.WAITING) return;
-
-    p.isReady = !!isReady;
-    broadcastLobby(room);
-
-    // Notif ke semua
-    io.to(room.id).emit("playerReadyChange", {
-      playerId: socket.id,
-      username: p.username,
-      isReady:  p.isReady,
-    });
-  });
-
-  // ── UPDATE PLAYER SETTINGS (warna, mode, dll) DI LOBBY ───────────────
-  socket.on("updateLobbySettings", ({ color, mode }) => {
-    const p = players.get(socket.id);
-    const room = getRoomOf(socket.id);
-    if (!p || !room || room.state !== LOBBY_STATE.WAITING) return;
-    if (color) p.color = color;
-    if (mode)  p.mode  = mode;
-    broadcastLobby(room);
-  });
-
-  // ── START MATCH (Host Only) ───────────────────────────────────────────
-  socket.on("startMatch", () => {
     const p    = players.get(socket.id);
     const room = getRoomOf(socket.id);
-    if (!p || !room) return;
-    if (room.hostId !== socket.id) {
-      socket.emit("startError", { message: "Hanya host yang bisa memulai pertandingan." });
-      return;
-    }
-    if (room.state !== LOBBY_STATE.WAITING) return;
-    if (room.players.length < 1) {
-      socket.emit("startError", { message: "Minimal 1 pemain diperlukan." });
-      return;
-    }
-
-    room.state = LOBBY_STATE.MATCH_STARTING;
+    if (!p || !room || room.state !== LOBBY_STATE.WAITING) return;
+    if (room.hostId === socket.id) return; // host selalu ready
+    p.isReady = !!isReady;
     broadcastLobby(room);
+    io.to(room.id).emit("playerReadyChange", { id: socket.id, username: p.username, isReady: p.isReady });
+  });
 
-    // Hitung mundur 3 detik
+  socket.on("toggleReady", () => {
+    const p    = players.get(socket.id);
+    const room = getRoomOf(socket.id);
+    if (!p || !room || room.state !== LOBBY_STATE.WAITING) return;
+    if (room.hostId === socket.id) return;
+    p.isReady = !p.isReady;
+    broadcastLobby(room);
+    io.to(room.id).emit("playerReadyChange", { id: socket.id, username: p.username, isReady: p.isReady });
+  });
+
+  // ── Quick Join ────────────────────────────────────────────────────────
+  // FIX: Server langsung proses join/create room (tidak emit redirect ke client)
+  socket.on("quickJoin", ({ username, color, mode }) => {
+    const name = (username || "").trim().substring(0, 12);
+    if (!name) { socket.emit("quickJoinError", { message: "Nama tidak boleh kosong." }); return; }
+
+    // Cari room publik yang available
+    let targetRoom = null;
+    rooms.forEach(r => {
+      if (!targetRoom && !r.settings.isPrivate && r.state === LOBBY_STATE.WAITING
+          && r.players.length < r.settings.maxPlayers && !r.isLocked) {
+        targetRoom = r;
+      }
+    });
+
+    if (targetRoom) {
+      // Langsung join room yang ditemukan
+      const existingRoom = getRoomOf(socket.id);
+      if (existingRoom) leaveRoom(socket, existingRoom);
+
+      let team = null;
+      if (targetRoom.settings.teamMode) {
+        const redCount  = targetRoom.players.filter(sid => players.get(sid)?.team === "red").length;
+        const blueCount = targetRoom.players.filter(sid => players.get(sid)?.team === "blue").length;
+        team = redCount <= blueCount ? "red" : "blue";
+      }
+
+      players.set(socket.id, {
+        id: socket.id, username: name, color: color || "#00cfff",
+        roomId: targetRoom.id, isReady: false, status: "lobby",
+        score: 0, lives: 3, ping: 0, mode: mode || "easy",
+        sessionStats: emptyStats(), lastX: null, lastY: null, dx: 0, dy: 0, team,
+      });
+
+      targetRoom.players.push(socket.id);
+      socket.join(targetRoom.id);
+
+      socket.emit("joinedRoom", {
+        roomId:    targetRoom.id,
+        roomName:  targetRoom.settings.name,
+        isHost:    false,
+        serverUrl: SERVER_LAN_URL,
+        isCloud:   IS_CLOUD,
+        team,
+      });
+
+      io.to(targetRoom.id).emit("playerJoined", { id: socket.id, username: name, count: targetRoom.players.length });
+      broadcastLobby(targetRoom);
+      console.log(`[QuickJoin] ${name} joined existing room ${targetRoom.id}`);
+    } else {
+      // Buat room baru
+      const existingRoom = getRoomOf(socket.id);
+      if (existingRoom) leaveRoom(socket, existingRoom);
+
+      const roomId = generateRoomId();
+      const room   = {
+        id:         roomId,
+        hostId:     socket.id,
+        players:    [socket.id],
+        spectators: [],
+        state:      LOBBY_STATE.WAITING,
+        bossEngine: null,
+        settings: {
+          name:       `${name}'s Room`,
+          maxPlayers: 8,
+          mode:       mode || "easy",
+          gameMode:   "normal",
+          teamMode:   false,
+          isPrivate:  false,
+        },
+        createdAt:  Date.now(),
+        startedAt:  null,
+        isLocked:   false,
+      };
+      rooms.set(roomId, room);
+
+      players.set(socket.id, {
+        id: socket.id, username: name, color: color || "#00cfff",
+        roomId, isReady: true, status: "lobby",
+        score: 0, lives: 3, ping: 0, mode: mode || "easy",
+        sessionStats: emptyStats(), lastX: null, lastY: null, dx: 0, dy: 0, team: null,
+      });
+
+      socket.join(roomId);
+      socket.emit("joinedRoom", {
+        roomId, roomName: room.settings.name, isHost: true,
+        serverUrl: SERVER_LAN_URL, isCloud: IS_CLOUD, team: null,
+      });
+      socket.emit("roomCreated", {
+        roomId, roomName: room.settings.name, isHost: true,
+        serverUrl: SERVER_LAN_URL, isCloud: IS_CLOUD,
+      });
+      broadcastLobby(room);
+      console.log(`[QuickJoin] ${name} created new room ${roomId}`);
+    }
+  });
+
+  // ── Start Match ───────────────────────────────────────────────────────
+  socket.on("startMatch", () => {
+    const room = getRoomOf(socket.id);
+    if (!room || room.hostId !== socket.id || room.state !== LOBBY_STATE.WAITING) return;
+    if (room.players.length < 1) {
+      socket.emit("startMatchError", { message: "Tidak ada pemain di room!" });
+      return;
+    }
+
+    // Cek semua pemain siap (kecuali host)
+    const notReady = room.players.filter(sid => {
+      if (sid === room.hostId) return false; // host tidak perlu ready
+      const p = players.get(sid);
+      return p && !p.isReady;
+    });
+
+    if (notReady.length > 0) {
+      const names = notReady.map(sid => players.get(sid)?.username || "?").join(", ");
+      socket.emit("startMatchError", { message: `Masih ada pemain yang belum siap: ${names}` });
+      return;
+    }
+
+    room.state     = LOBBY_STATE.MATCH_STARTING;
+    room.startedAt = Date.now();
+    io.to(room.id).emit("matchStarting", { countdown: 3 });
+
     let count = 3;
-    io.to(room.id).emit("matchCountdown", { count });
-    const interval = setInterval(() => {
+    const cd  = setInterval(() => {
+      io.to(room.id).emit("countdown", { count });
       count--;
-      if (count > 0) {
-        io.to(room.id).emit("matchCountdown", { count });
-      } else {
-        clearInterval(interval);
+      if (count < 0) {
+        clearInterval(cd);
         room.state = LOBBY_STATE.PLAYING;
-        // Reset stats semua pemain
         room.players.forEach(sid => {
-          const pl = players.get(sid);
-          if (pl) {
-            pl.status = "alive";
-            pl.score  = 0;
-            pl.lives  = { easy: 3, medium: 2, hard: 1 }[pl.mode] || 3;
-            pl.sessionStats = emptyStats();
-          }
+          const p = players.get(sid);
+          if (p) p.status = "alive";
         });
-        io.to(room.id).emit("matchStart", {
-          roomId: room.id,
+
+        if (room.settings.gameMode === "boss") {
+          room.bossEngine = new BossEngine(room.id);
+          room.bossEngine.start();
+        }
+
+        const seasonalEvent = getCurrentSeasonalEvent();
+        io.to(room.id).emit("matchStarted", {
+          roomId:   room.id,
+          mode:     room.settings.mode,
+          gameMode: room.settings.gameMode,
+          teamMode: room.settings.teamMode,
+          seasonalEvent,
           players: room.players.map(sid => {
             const pl = players.get(sid);
-            return pl ? { id: pl.id, username: pl.username, color: pl.color, mode: pl.mode } : null;
+            return pl ? { id: sid, username: pl.username, color: pl.color, mode: pl.mode } : null;
           }).filter(Boolean),
         });
         broadcastLeaderboard(room);
-        console.log(`[Room ${room.id}] Match STARTED! (${room.players.length} pemain)`);
       }
     }, 1000);
   });
 
-  // ── PLAYER UPDATE (saat bermain) ──────────────────────────────────────
-  socket.on("playerUpdate", ({ score, lives, status, sessionStats }) => {
+  // ── Player Update ─────────────────────────────────────────────────────
+  socket.on("playerUpdate", (data) => {
     const p    = players.get(socket.id);
     const room = getRoomOf(socket.id);
     if (!p || !room) return;
 
-    if (status === "dead" && score === 0 && lives === 0) {
-      // Keluar dari room
-      leaveRoom(socket, room);
-      return;
+    const MAX_SCORE_DELTA = 30;
+    if (data.score !== undefined) {
+      const delta = (data.score || 0) - (p.score || 0);
+      if (delta > MAX_SCORE_DELTA) {
+        p._cheatFlag = (p._cheatFlag || 0) + 1;
+        if (p._cheatFlag > 5) { console.warn(`[AntiCheat] ${p.username} score anomaly detected`); return; }
+      }
+      p.score = Math.max(0, data.score);
     }
 
-    p.score  = typeof score  === "number" && score  >= 0 ? score  : p.score;
-    p.lives  = typeof lives  === "number"             ? lives  : p.lives;
-    p.status = status ?? p.status;
-    if (sessionStats && typeof sessionStats === "object") Object.assign(p.sessionStats, sessionStats);
+    if (data.lives  !== undefined) p.lives  = data.lives;
+    if (data.status !== undefined) p.status = data.status;
+    if (data.x      !== undefined) p.lastX  = data.x;
+    if (data.y      !== undefined) p.lastY  = data.y;
+    if (data.dx     !== undefined) p.dx     = data.dx;
+    if (data.dy     !== undefined) p.dy     = data.dy;
+    if (data.sessionStats) p.sessionStats = { ...p.sessionStats, ...data.sessionStats };
 
+    updateGlobalScore(p);
     broadcastLeaderboard(room);
 
-    // Cek apakah semua dead → kembali ke lobby
-    if (room.state === LOBBY_STATE.PLAYING) {
-      const aliveCount = room.players.filter(sid => {
+    // Cek apakah match selesai
+    if (p.status === "dead" && room.state === LOBBY_STATE.PLAYING) {
+      const alivePlayers = room.players.filter(sid => {
         const pl = players.get(sid);
         return pl && pl.status === "alive";
-      }).length;
-      if (aliveCount === 0) {
+      });
+
+      if (alivePlayers.length <= 1 && room.players.length > 1) {
         room.state = LOBBY_STATE.FINISHED;
-        io.to(room.id).emit("matchFinished", { reason: "Semua pemain selesai." });
-        // Auto kembali ke lobby setelah 8 detik
-        setTimeout(() => returnToLobby(room), 8000);
+        const winner = alivePlayers.length === 1 ? players.get(alivePlayers[0]) : null;
+        const reason = winner ? `🏆 ${winner.username} menang!` : "Semua pemain selesai. 🏁";
+        io.to(room.id).emit("matchFinished", { reason });
+
+        if (room.settings.mode === "ranked") calculateElo(room.players.map(sid => players.get(sid)).filter(Boolean));
+        saveMatchHistory(room, winner);
+
+        setTimeout(() => broadcastMatchSummary(room), 1000);
+        setTimeout(() => returnToLobby(room), 10000);
       }
     }
   });
 
-  // ── RETURN TO LOBBY (Manual) ──────────────────────────────────────────
-  socket.on("returnToLobby", () => {
+  // ── Host Controls ─────────────────────────────────────────────────────
+  socket.on("kickPlayer", ({ targetId }) => {
     const room = getRoomOf(socket.id);
-    if (!room) return;
-    if (room.hostId !== socket.id) return;
-    returnToLobby(room);
+    if (!room || room.hostId !== socket.id) return;
+    if (!targetId || targetId === socket.id) return;
+    io.to(targetId).emit("kicked", { reason: "Dikeluarkan oleh host." });
+    leaveRoomById(targetId, room);
   });
 
-  // ── GHOST SABOTEUR ────────────────────────────────────────────────────
+  socket.on("lockRoom", ({ locked }) => {
+    const room = getRoomOf(socket.id);
+    if (!room || room.hostId !== socket.id) return;
+    room.isLocked = !!locked;
+    io.to(room.id).emit("roomLockChanged", { locked: room.isLocked });
+  });
+
+  // FIX: updateRoomSettings — semua field diproses dengan benar termasuk gameMode
+  socket.on("updateRoomSettings", ({ roomName, mode, maxPlayers, isPrivate, teamMode, gameMode }) => {
+    const room = getRoomOf(socket.id);
+    if (!room || room.hostId !== socket.id || room.state !== LOBBY_STATE.WAITING) return;
+
+    if (roomName !== undefined && roomName !== null)
+      room.settings.name = roomName.toString().substring(0, 20).trim() || room.settings.name;
+    if (mode !== undefined && mode !== null)
+      room.settings.mode = ["easy", "medium", "hard", "ranked"].includes(mode) ? mode : room.settings.mode;
+    if (maxPlayers !== undefined && maxPlayers !== null) {
+      const mp = parseInt(maxPlayers);
+      if (!isNaN(mp)) room.settings.maxPlayers = Math.min(8, Math.max(1, mp));
+    }
+    if (typeof isPrivate === "boolean") room.settings.isPrivate = isPrivate;
+    if (typeof teamMode  === "boolean") room.settings.teamMode  = teamMode;
+    if (gameMode !== undefined && gameMode !== null)
+      room.settings.gameMode = ["normal", "boss", "ranked"].includes(gameMode) ? gameMode : room.settings.gameMode;
+
+    broadcastLobby(room);
+    io.to(room.id).emit("roomSettingsUpdated", { settings: room.settings });
+    console.log(`[Room] ${room.id} settings updated: mode=${room.settings.mode}, gameMode=${room.settings.gameMode}`);
+  });
+
+  // ── Vote Kick ─────────────────────────────────────────────────────────
+  socket.on("voteKick", ({ targetId }) => {
+    const room = getRoomOf(socket.id);
+    if (!room || room.state !== LOBBY_STATE.PLAYING) return;
+    const key = room.id;
+    if (!voteKickMap.has(key)) {
+      voteKickMap.set(key, { targetId, votes: new Set() });
+    }
+    const vk = voteKickMap.get(key);
+    if (vk.targetId !== targetId) return;
+    vk.votes.add(socket.id);
+    const needed = Math.ceil(room.players.length * 0.6);
+    io.to(room.id).emit("voteKickProgress", {
+      targetId, targetName: players.get(targetId)?.username || "—",
+      votes: vk.votes.size, majority: needed,
+    });
+    if (vk.votes.size >= needed) {
+      io.to(targetId).emit("kicked", { reason: "Vote kick: mayoritas pemain memutuskan." });
+      leaveRoomById(targetId, room);
+      voteKickMap.delete(key);
+    }
+  });
+
+  // ── Lobby Announcement ────────────────────────────────────────────────
+  socket.on("lobbyAnnouncement", ({ message }) => {
+    const room = getRoomOf(socket.id);
+    if (!room || room.hostId !== socket.id) return;
+    const clean = (message || "").trim().substring(0, 100);
+    if (!clean) return;
+    io.to(room.id).emit("announcement", { message: clean, type: "success", ts: Date.now() });
+  });
+
+  // ── XP Sync ───────────────────────────────────────────────────────────
+  socket.on("xpSync", ({ xp, level, username }) => {
+    const p = players.get(socket.id);
+    if (!p || !db) return;
+    const safeXp    = Math.max(0, Math.min(10000, xp || 0));
+    const safeLevel = Math.max(1, Math.min(10, level || 1));
+    try {
+      db.prepare(`
+        INSERT INTO players (id, username, total_xp) VALUES (?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET total_xp = MAX(total_xp, excluded.total_xp), username = excluded.username
+      `).run(socket.id, username || p.username, safeXp);
+    } catch {}
+  });
+
+  // ── Boss Hit ──────────────────────────────────────────────────────────
+  socket.on("bossHit", ({ damage }) => {
+    const room = getRoomOf(socket.id);
+    if (room?.bossEngine) room.bossEngine.applyDamage(Math.min(damage || 100, 500));
+  });
+
+  // ── Match Summary ─────────────────────────────────────────────────────
+  socket.on("requestMatchSummary", () => {
+    const room = getRoomOf(socket.id);
+    const p    = players.get(socket.id);
+    if (!p) return;
+    if (room) {
+      broadcastMatchSummary(room);
+    } else {
+      socket.emit("matchSummaryData", {
+        username:     p.username,
+        finalScore:   p.score || 0,
+        finalRank:    null,
+        totalPlayers: 1,
+        stats:        p.sessionStats || emptyStats(),
+        awards:       [],
+        seasonalEvent: getCurrentSeasonalEvent(),
+      });
+    }
+  });
+
+  // ── Ghost / Saboteur ──────────────────────────────────────────────────
   socket.on("ghostDrop", ({ targetId }) => {
     const sender = players.get(socket.id);
     const target = players.get(targetId);
     if (!sender || !target) return;
-    const sRoom = getRoomOf(socket.id);
-    const tRoom = getRoomOf(targetId);
-    if (!sRoom || !tRoom || sRoom.id !== tRoom.id) return;
     sender.sessionStats.saboteurSent++;
     target.sessionStats.saboteurReceived++;
     io.to(targetId).emit("incomingPoop");
   });
 
-  // ── QUICK CHAT ────────────────────────────────────────────────────────
+  // ── Quick Chat ────────────────────────────────────────────────────────
   socket.on("quickChat", ({ message }) => {
     const p    = players.get(socket.id);
     const room = getRoomOf(socket.id);
     if (!p || !room) return;
-    if (!QUICK_CHAT_MESSAGES.includes(message)) return;
-    const last = chatCooldowns.get(socket.id) || 0;
+    // FIX: Lebih permissive — terima pesan dari daftar server ATAU preset client
+    const allowed = [
+      ...QUICK_CHAT_MESSAGES,
+      "GG!", "Nice!", "Nooo!", "Help!", "Watch Out!",
+      "Good Luck!", "I'm Coming!", "😂", "😎", "🔥", "😱", "👑",
+    ];
+    if (!allowed.includes(message)) return;
+    const last = chatCooldowns.get(socket.id + "_qc") || 0;
     const now  = Date.now();
     if (now - last < CHAT_COOLDOWN_MS) return;
-    chatCooldowns.set(socket.id, now);
-    io.to(room.id).emit("quickChatMessage", {
-      id:       socket.id,
-      username: p.username,
-      message,
-      ts:       now,
-    });
+    chatCooldowns.set(socket.id + "_qc", now);
+    io.to(room.id).emit("quickChatMessage", { id: socket.id, username: p.username, message, ts: now });
   });
 
-  // ── MATCH SUMMARY ─────────────────────────────────────────────────────
-  socket.on("requestMatchSummary", () => {
-    const p    = players.get(socket.id);
-    const room = getRoomOf(socket.id);
-    if (!p || !room) return;
-    const allPlayers  = room.players.map(sid => players.get(sid)).filter(Boolean);
-    const sorted      = [...allPlayers].sort((a, b) => b.score - a.score);
-    const awards      = buildAwards(socket.id, p, allPlayers, sorted);
-    const finalRank   = sorted.findIndex(pl => pl.id === socket.id) + 1;
-    socket.emit("matchSummaryData", {
-      username: p.username, finalScore: p.score,
-      finalRank, totalPlayers: allPlayers.length,
-      stats: p.sessionStats, awards,
-    });
-  });
-
-  // ── LOBBY CHAT (text biasa di lobby) ─────────────────────────────────
+  // ── Lobby Chat ────────────────────────────────────────────────────────
   socket.on("lobbyChat", ({ message }) => {
     const p    = players.get(socket.id);
     const room = getRoomOf(socket.id);
     if (!p || !room) return;
-    if (room.state !== LOBBY_STATE.WAITING && room.state !== LOBBY_STATE.READY_CHECK) return;
+    const last = chatCooldowns.get(socket.id + "_chat") || 0;
+    const now  = Date.now();
+    if (now - last < CHAT_COOLDOWN_MS) return;
+    chatCooldowns.set(socket.id + "_chat", now);
     const clean = (message || "").trim().substring(0, 80);
     if (!clean) return;
-    const last = chatCooldowns.get(socket.id + "_lobby") || 0;
-    const now  = Date.now();
-    if (now - last < 1000) return;
-    chatCooldowns.set(socket.id + "_lobby", now);
-    io.to(room.id).emit("lobbyChatMessage", {
-      id:       socket.id,
-      username: p.username,
-      message:  clean,
-      ts:       now,
-    });
+    io.to(room.id).emit("lobbyChatMessage", { id: socket.id, username: p.username, message: clean, ts: now });
   });
 
-  // ── DISCONNECT ────────────────────────────────────────────────────────
-  socket.on("disconnect", () => {
+  // ── Return to Lobby ───────────────────────────────────────────────────
+  socket.on("returnToLobby", () => {
+    const room = getRoomOf(socket.id);
+    if (room && room.hostId === socket.id) returnToLobby(room);
+  });
+
+  // ── Exit Game ─────────────────────────────────────────────────────────
+  socket.on("exitGame", () => {
+    const room = getRoomOf(socket.id);
+    if (room) leaveRoom(socket, room);
+  });
+
+  // ── Disconnect ────────────────────────────────────────────────────────
+  socket.on("disconnect", reason => {
     const p    = players.get(socket.id);
     const room = getRoomOf(socket.id);
-    console.log(`[-] Disconnected: ${socket.id} ${p ? `(${p.username})` : ""}`);
+    console.log(`[Socket] Disconnect: ${socket.id} (${p?.username || "?"}) — reason: ${reason}`);
 
-    if (!p || !room) {
-      players.delete(socket.id);
-      chatCooldowns.delete(socket.id);
-      return;
-    }
+    // Hapus dari spectators jika menonton
+    rooms.forEach(r => {
+      if (r.spectators) {
+        const idx = r.spectators.findIndex(s => s.id === socket.id);
+        if (idx !== -1) {
+          r.spectators.splice(idx, 1);
+          io.to(r.id).emit("spectatorCountUpdate", { count: r.spectators.length });
+        }
+      }
+    });
+
+    if (!p || !room) { players.delete(socket.id); return; }
 
     if (room.state === LOBBY_STATE.PLAYING) {
-      // Grace period: tunggu reconnect
+      saveSessionToken(socket.id, room.id);
       p.status = "disconnected";
       broadcastLeaderboard(room);
       io.to(room.id).emit("playerDisconnected", { id: socket.id, username: p.username });
@@ -522,32 +1275,83 @@ io.on("connection", (socket) => {
   });
 });
 
-// ── Room Helpers ───────────────────────────────────────────────────────────
-function leaveRoom(socket, room) {
-  leaveRoomById(socket.id, room);
+// ════════════════════════════════════════════════════════════════════════════
+//  MATCH SUMMARY BROADCAST
+// ════════════════════════════════════════════════════════════════════════════
+function broadcastMatchSummary(room) {
+  if (!room) return;
+  const sortedPlayers = room.players
+    .map(sid => players.get(sid))
+    .filter(Boolean)
+    .sort((a, b) => (b.score || 0) - (a.score || 0));
+
+  const seasonalEvent = getCurrentSeasonalEvent();
+
+  sortedPlayers.forEach((p, index) => {
+    const rank   = index + 1;
+    const awards = [];
+    if (rank === 1)                                          awards.push({ icon: "🏆", label: "Juara Pertama!" });
+    if ((p.sessionStats?.highestCombo || 0) >= 10)          awards.push({ icon: "🔥", label: "Combo Master!" });
+    if ((p.sessionStats?.applesEaten || 0) >= 30)           awards.push({ icon: "🍎", label: "Apple Maniac!" });
+    if ((p.sessionStats?.goldCollected || 0) >= 10)         awards.push({ icon: "✨", label: "Golden Touch!" });
+    if ((p.sessionStats?.saboteurSent || 0) >= 3)           awards.push({ icon: "👻", label: "Saboteur!" });
+    if (rank === sortedPlayers.length && sortedPlayers.length > 1) awards.push({ icon: "🐌", label: "Last Survivor" });
+
+    let rpChange = null;
+    if (room.settings.mode === "ranked" && db) {
+      try {
+        const row = db.prepare("SELECT rp, tier FROM players WHERE id = ?").get(p.id);
+        if (row) rpChange = { rp: row.rp, tier: row.tier };
+      } catch {}
+    }
+
+    io.to(p.id).emit("matchSummaryData", {
+      username:     p.username,
+      finalScore:   p.score || 0,
+      finalRank:    rank,
+      totalPlayers: sortedPlayers.length,
+      stats:        p.sessionStats || emptyStats(),
+      awards,
+      rpChange,
+      mode:         room.settings.mode,
+      seasonalEvent,
+      teamMode:     room.settings.teamMode,
+      team:         p.team,
+    });
+  });
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ROOM LIFECYCLE HELPERS
+// ════════════════════════════════════════════════════════════════════════════
+function leaveRoom(socket, room) { leaveRoomById(socket.id, room); }
 
 function leaveRoomById(socketId, room) {
   if (!room) return;
   const p = players.get(socketId);
 
   room.players = room.players.filter(sid => sid !== socketId);
+
   if (p) {
-    io.to(room.id).emit("playerLeft", { username: p.username, count: room.players.length });
+    io.to(room.id).emit("playerLeft", { id: socketId, username: p.username, count: room.players.length });
     p.roomId  = null;
     p.isReady = false;
   }
   players.delete(socketId);
-  chatCooldowns.delete(socketId);
 
   if (room.players.length === 0) {
-    cleanupRoom(room.id);
+    // FIX: Hanya set ghost timer sekali
+    if (!roomGhostTimers.has(room.id)) {
+      const gt = setTimeout(() => {
+        cleanupRoom(room.id);
+        roomGhostTimers.delete(room.id);
+      }, ROOM_GHOST_TTL_MS);
+      roomGhostTimers.set(room.id, gt);
+    }
     return;
   }
 
-  // Jika host yang keluar, migrasi host
   if (room.hostId === socketId) migrateHost(room);
-
   broadcastLobby(room);
   broadcastLeaderboard(room);
 }
@@ -555,63 +1359,66 @@ function leaveRoomById(socketId, room) {
 function returnToLobby(room) {
   if (!room) return;
   room.state = LOBBY_STATE.WAITING;
+  if (room.bossEngine) { room.bossEngine.stop(); room.bossEngine = null; }
+  room.startedAt = null;
   room.players.forEach(sid => {
     const pl = players.get(sid);
-    if (pl) { pl.isReady = false; pl.status = "lobby"; pl.score = 0; }
+    if (pl) { pl.isReady = false; pl.status = "lobby"; pl.score = 0; pl.sessionStats = emptyStats(); }
   });
-  // Host auto-ready
   const host = players.get(room.hostId);
   if (host) host.isReady = true;
   io.to(room.id).emit("returnedToLobby", { roomId: room.id });
   broadcastLobby(room);
-  console.log(`[Room ${room.id}] Kembali ke lobby.`);
+  console.log(`[Room] ${room.id} kembali ke lobby`);
 }
 
-function findAvailableRoom() {
-  for (const [id, room] of rooms) {
-    if (room.state === LOBBY_STATE.WAITING && room.players.length < room.settings.maxPlayers) {
-      return id;
-    }
-  }
-  return null;
-}
-
-function emptyStats() {
-  return {
-    applesEaten: 0, goldCollected: 0, bananasCollected: 0,
-    poopHits: 0, powerUpsUsed: 0, saboteurSent: 0, saboteurReceived: 0,
-    highestCombo: 0, maxLevel: 1,
-  };
-}
-
-function buildAwards(socketId, p, allPlayers, sorted) {
-  const awards = [];
-  const sortedByCombo = [...allPlayers].sort((a,b) => b.sessionStats.highestCombo - a.sessionStats.highestCombo);
-  const sortedBySabot = [...allPlayers].sort((a,b) => b.sessionStats.saboteurSent - a.sessionStats.saboteurSent);
-  const sortedByGold  = [...allPlayers].sort((a,b) => b.sessionStats.goldCollected - a.sessionStats.goldCollected);
-  if (sorted[0]?.id         === socketId) awards.push({ icon: "👑", label: "Highest Score" });
-  if (sortedByCombo[0]?.id  === socketId) awards.push({ icon: "🔥", label: "Highest Combo" });
-  if (sortedBySabot[0]?.id  === socketId && p.sessionStats.saboteurSent > 0) awards.push({ icon: "👻", label: "Saboteur King" });
-  if (sortedByGold[0]?.id   === socketId) awards.push({ icon: "✨", label: "Most Gold" });
-  if (sorted[0]?.id         === socketId) awards.push({ icon: "🛡", label: "Longest Survivor" });
-  return awards;
-}
-
-// ── Server Listen ──────────────────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════════════════
+//  START SERVER
+// ════════════════════════════════════════════════════════════════════════════
 if (require.main === module) {
   server.listen(PORT, "0.0.0.0", () => {
-    console.log(`\n🐍 Snake Arcade v8.0 — Lobby System Active`);
-    console.log(`   ➜ Local       : http://localhost:${PORT}`);
-    console.log(`   ➜ LAN/Cloud   : ${SERVER_LAN_URL}`);
-    if (process.env.PUBLIC_URL) {
-      console.log(`   ➜ Cloud Mode  : ✅ PUBLIC_URL detected`);
+    const event = getCurrentSeasonalEvent();
+    console.log(`\n🐍 Snake Arcade v9.0 — Bug Fix Edition`);
+    console.log(`   ➜ Local  : http://localhost:${PORT}`);
+    console.log(`   ➜ LAN    : ${SERVER_LAN_URL}`);
+    
+    // Tampilkan interface fisik yang tersedia (virtual sudah difilter)
+    if (ALL_LAN_IPS.length > 1) {
+      console.log(`\n   📡 NETWORK TERSEDIA (virtual/VirtualBox difilter):`);
+      ALL_LAN_IPS.forEach((item, idx) => {
+        const tag = idx === 0 ? " ← PRIMARY (gunakan ini)" : "";
+        console.log(`      [${idx + 1}] http://${item.ip}:${PORT} (${item.interface})${tag}`);
+      });
+    } else if (ALL_LAN_IPS.length === 1) {
+      console.log(`   📡 Network: ${ALL_LAN_IPS[0].interface} (${ALL_LAN_IPS[0].ip})`);
+    } else {
+      console.log(`   ⚠️  Tidak ada network LAN fisik terdeteksi. Gunakan localhost.`);
     }
+    
+    console.log(`\n   ➜ DB     : ${db ? "SQLite Active (Ranked + History enabled)" : "RAM Mode"}`);
+    console.log(`   ➜ Event  : ${event.name} (x${event.multiplier})`);
+    console.log(`   ➜ API    : /api/rooms | /api/leaderboard | /api/player/:id | /health`);
     console.log();
-    if (qrcode) {
-      console.log(`📲 QR Code:`);
-      qrcode.generate(SERVER_LAN_URL, { small: true });
+    
+    if (qrcode && !IS_CLOUD) {
+      if (ALL_LAN_IPS.length > 0) {
+        console.log("📲 QR Code LAN (Primary — scan dari HP):");
+        qrcode.generate(SERVER_LAN_URL, { small: true });
+
+        // Tampilkan QR code tambahan hanya jika ada interface fisik lain
+        if (ALL_LAN_IPS.length > 1) {
+          console.log("\n📲 QR Code Tambahan (interface fisik lain):");
+          for (let i = 1; i < ALL_LAN_IPS.length; i++) {
+            const altUrl = `http://${ALL_LAN_IPS[i].ip}:${PORT}`;
+            console.log(`\n   [${i + 1}] ${ALL_LAN_IPS[i].interface}:`);
+            qrcode.generate(altUrl, { small: true });
+          }
+        }
+      } else {
+        console.log("ℹ️  QR Code tidak ditampilkan (tidak ada network LAN fisik).");
+      }
     }
   });
 }
 
-module.exports = { app, server };
+module.exports = { app, server, io };

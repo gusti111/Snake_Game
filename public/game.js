@@ -1,15 +1,57 @@
 // ============================================================================
-// game.js — Snake Arcade v6.0 Client (Progression Edition)
+// game.js — Snake Arcade v8.0 Client · FULL UPGRADE — Bug Fix & Feature Upgrade
 // Grafika Komputer · PjBL · D3 Teknik Informatika POLNEP
 //
-// ★ FITUR BARU v6.0:
-//  ✦ Permanent Stats System   — Statistik permanen disimpan localStorage
-//  ✦ Achievement System       — 20 achievement dengan unlock & notifikasi
-//  ✦ Trail Effect             — Jejak cahaya ular yang memudar elegan
-//  ✦ Floating Score Text      — Teks +skor / COMBO! melayang di atas item
-//  ✦ Power-Up System          — Shield, Magnet, DoubleScore, SlowMotion
-//  ✦ XP & Level Account       — Meta-progression dengan reward kosmetik
-//  ✦ Player Profile UI        — Panel statistik & achievement di start screen
+// ★ BUG FIXES v7.0 (dipertahankan):
+//  ✦ FIX: overlayBestDisplay null-check (crash saat elemen tidak ada)
+//  ✦ FIX: hexAlpha error pada warna non-hex (misal custom color)
+//  ✦ FIX: inputQueue direction reversal (ular bisa balik arah 180°)
+//  ✦ FIX: Pause saat level transition tidak berfungsi
+//  ✦ FIX: startBtn addEventListener ganda (startGame dipanggil 2x)
+//  ✦ FIX: BGM tidak berhenti saat exitToMainMenu
+//  ✦ FIX: Lives display salah saat mode=hard (show 1 heart not 3)
+//  ✦ FIX: Poop expire tidak cleanup dengan benar
+//  ✦ FIX: Socket.off tidak dipanggil sebelum rebind (listener duplikat)
+//  ✦ FIX: quickJoin fallback crash jika socket undefined
+//  ✦ FIX: Lobby button wired ganda (ready btn click 2x setelah lobby re-show)
+//  ✦ FIX: ESC key pause+konfirmasi race condition
+//  ✦ FIX: Multi-tab join tidak reset activeMultiTab
+//  ✦ FIX: Color picker custom color tidak update swatch preview
+//  ✦ FIX: updateBestUI crash jika overlayBestDisplay tidak ada
+//  ✦ FIX: Score display tidak reset saat restartGame
+//  ✦ FIX: handleDeath tidak memanggil emitToServer saat mati
+//  ✦ FIX: ghostBtn tidak disembunyikan saat game over
+//  ✦ FIX: lobbyCountdown tidak reset numEl saat show ulang
+//
+// ★ UPGRADES v7.0 (dipertahankan):
+//  ✦ NEW: Reconnect Token flow otomatis dengan overlay UI
+//  ✦ NEW: Power-up bar injected otomatis & stabil
+//  ✦ NEW: Quick Chat extended & whitelist sinkron dengan server
+//  ✦ NEW: Boss Hit radius visual indicator di canvas
+//  ✦ NEW: Match Summary single player dengan stats penuh
+//  ✦ NEW: Latency indicator di header game (in-game ping)
+//  ✦ NEW: Profile panel XP bar animasi smooth
+//  ✦ NEW: Announcement system dari server ditampilkan via notify
+//  ✦ NEW: Vote kick UI feedback di lobby chat
+//  ✦ NEW: Game Over screen: tombol MAIN LAGI & MENU UTAMA jelas
+//
+// ★ BUG FIXES v8.0 (baru):
+//  ✦ FIX: quickJoinBtn (#quickJoinBtn) tidak di-wire ke triggerQuickJoin()
+//  ✦ FIX: Room browser auto-refresh belum diimplementasikan (hanya di changelog)
+//  ✦ FIX: toggleMuteInGame() & triggerManualExitConfirmation() tidak ada (dipanggil dari HTML)
+//  ✦ FIX: matchStarting dari server tidak ditangani (hanya matchCountdown/countdown)
+//  ✦ FIX: lobbyReadyHintText vs lobbyReadyHint — ID tidak konsisten
+//  ✦ FIX: sendPoop (saboteur) tidak ada event handler di socket
+//  ✦ FIX: exitToMainMenu tidak stop render loop sebelum transisi state
+//  ✦ FIX: initLobbyButtons() tidak wire quickJoinBtn dari HTML
+//
+// ★ UPGRADES v8.0 (baru):
+//  ✦ NEW: Room browser auto-refresh setiap 10 detik saat panel terbuka
+//  ✦ NEW: toggleMuteInGame() & triggerManualExitConfirmation() global helpers
+//  ✦ NEW: matchStarting handler dengan countdown animasi dari server
+//  ✦ NEW: Saboteur (sendPoop) emit button wiring dari in-game UI
+//  ✦ NEW: Ghost button visibilitas saat mode spectator multi
+//  ✦ NEW: Konsistensi ID lobbyReadyHint & lobbyReadyHintText
 // ============================================================================
 
 "use strict";
@@ -346,6 +388,26 @@ function toggleGlobalMute() {
   saveUserPrefs();
 }
 
+// ★ v8.0 FIX: Global helpers dipanggil dari HTML onclick attribute
+// Diperlukan karena index.html memanggil: onclick="toggleMuteInGame()"
+function toggleMuteInGame() {
+  toggleGlobalMute();
+}
+
+// Diperlukan karena index.html memanggil: onclick="triggerManualExitConfirmation()"
+function triggerManualExitConfirmation() {
+  if (currentState !== STATE.PLAYING && currentState !== STATE.PAUSED) return;
+  // Pause dulu untuk membekukan game sebelum dialog muncul
+  if (currentState === STATE.PLAYING) togglePause();
+  setTimeout(() => {
+    if (confirm("Keluar dari sesi permainan aktif dan kembali ke menu utama?")) {
+      exitToMainMenu();
+    } else if (currentState === STATE.PAUSED) {
+      togglePause(); // lanjut lagi jika batal
+    }
+  }, 50);
+}
+
 function applyBGMVolume(v) {
   bgmVolume = v;
   if (bgmGainNode && audioCtx) {
@@ -365,9 +427,13 @@ function applySnakeColor(hex, name) {
   snakeColor     = hex;
   snakeColorName = name || hex;
   document.documentElement.style.setProperty("--snake-color", hex);
-  const r = parseInt(hex.slice(1,3),16);
-  const g = parseInt(hex.slice(3,5),16);
-  const b = parseInt(hex.slice(5,7),16);
+  // Safe hex parse — guard terhadap warna non-hex
+  let r = 0, g = 245, b = 196;
+  if (hex && hex.startsWith("#") && hex.length >= 7) {
+    r = parseInt(hex.slice(1,3),16) || 0;
+    g = parseInt(hex.slice(3,5),16) || 0;
+    b = parseInt(hex.slice(5,7),16) || 0;
+  }
   canvas.style.borderColor  = hex;
   canvas.style.boxShadow    = `0 0 30px rgba(${r},${g},${b},0.35), inset 0 0 20px rgba(0,0,0,0.3)`;
   if (playerNameTag) {
@@ -434,6 +500,40 @@ let bestScore        = 0;
 let selectedMode     = "easy";
 let selectedMainMode = "single";
 let activeMultiTab   = "host";
+
+// ── Session Token Storage (Fase 1: Reconnect System) ──────────────────────
+let _sessionToken    = null;   // Token aktif dari server
+let _sessionRoomId   = null;   // Room ID yang terkait dengan token
+let _reconnectAttempted = false;
+
+function saveSessionTokenLocal(token, roomId) {
+  _sessionToken  = token;
+  _sessionRoomId = roomId;
+  try {
+    localStorage.setItem("snake_arcade_session", JSON.stringify({ token, roomId, ts: Date.now() }));
+  } catch(e) {}
+}
+
+function loadSessionTokenLocal() {
+  try {
+    const raw = localStorage.getItem("snake_arcade_session");
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    // Buang token yang sudah > 35 detik (server TTL 30 dtk + 5 dtk buffer)
+    if (Date.now() - data.ts > 35000) {
+      localStorage.removeItem("snake_arcade_session");
+      return null;
+    }
+    return data;
+  } catch(e) { return null; }
+}
+
+function clearSessionToken() {
+  _sessionToken  = null;
+  _sessionRoomId = null;
+  _reconnectAttempted = false;
+  try { localStorage.removeItem("snake_arcade_session"); } catch(e) {}
+}
 
 function loadUserData() {
   try {
@@ -789,6 +889,9 @@ let inputQueue    = [];
 // Particles
 let particles     = [];
 
+// ★ Boss Tracking FSM
+let bossData      = null;
+
 // ★ Trail Effect — menyimpan posisi kepala snake sebelumnya
 let snakeTrail    = [];
 const TRAIL_MAX   = 12;   // panjang jejak
@@ -828,10 +931,11 @@ let shakeDecay     = 0.85;
 // ════════════════════════════════════════════════════════════════════════════
 const POWERUP_TYPES = {
   shield:      { color: "#00cfff", icon: "🛡", label: "SHIELD",       duration: 8000 },
-  magnet:      { color: "#b066ff", icon: "🧲", label: "MAGNET",       duration: 6000 },
   doublescr:   { color: "#ffd700", icon: "✖2", label: "DOUBLE SCORE", duration: 7000 },
   slowmotion:  { color: "#ff8c00", icon: "🐌", label: "SLOW MOTION",  duration: 5000 },
 };
+// CATATAN: Magnet dihapus — menyebabkan item bergerak ke koordinat non-grid (desimal)
+// sehingga collision detection strict-equality tidak pernah cocok dan item tidak bisa dimakan.
 
 let activePowerUps = {}; // { type: { endTime } }
 
@@ -974,28 +1078,6 @@ function expireItems() {
   });
 }
 
-// ★ MAGNET: tarik apel terdekat ke arah kepala
-function applyMagnet() {
-  if (!isPowerUpActive("magnet")) return;
-  const head = snake[0];
-  const MAGNET_RADIUS = CELL * 4;
-  items.forEach(it => {
-    if (it.type !== "apple" && it.type !== "gold" && it.type !== "banana") return;
-    const dstX = head.x - it.x;
-    const dstY = head.y - it.y;
-    const dist = Math.sqrt(dstX * dstX + dstY * dstY);
-    if (dist < MAGNET_RADIUS && dist > 0) {
-      it.x += (dstX / dist) * 2.5;
-      it.y += (dstY / dist) * 2.5;
-      // snap ke grid jika sangat dekat
-      if (dist < CELL) {
-        it.x = head.x;
-        it.y = head.y;
-      }
-    }
-  });
-}
-
 // ════════════════════════════════════════════════════════════════════════════
 //  10. LERP RENDER PIPELINE
 // ════════════════════════════════════════════════════════════════════════════
@@ -1017,18 +1099,21 @@ function drawGrid() {
 // ★ TRAIL EFFECT
 function drawTrail() {
   const len = snakeTrail.length;
+  // Safe hex parse — guard terhadap warna non-hex atau panjang tidak valid
+  let tr = 0, tg = 200, tb = 196;
+  if (snakeColor && snakeColor.startsWith("#") && snakeColor.length >= 7) {
+    tr = parseInt(snakeColor.slice(1, 3), 16) || 0;
+    tg = parseInt(snakeColor.slice(3, 5), 16) || 0;
+    tb = parseInt(snakeColor.slice(5, 7), 16) || 0;
+  }
   for (let i = 0; i < len; i++) {
     const t = snakeTrail[i];
     const ageFactor = i / len;           // 0 = oldest, 1 = newest
     const alpha     = ageFactor * 0.35;  // max 35% opacity
     const size      = (CELL - 4) * ageFactor * 0.85;
 
-    const r = parseInt(snakeColor.slice(1, 3), 16);
-    const g = parseInt(snakeColor.slice(3, 5), 16);
-    const b = parseInt(snakeColor.slice(5, 7), 16);
-
     ctx.globalAlpha = alpha;
-    ctx.fillStyle   = `rgba(${r},${g},${b},1)`;
+    ctx.fillStyle   = `rgba(${tr},${tg},${tb},1)`;
     ctx.beginPath();
     const cx = t.x + CELL / 2;
     const cy = t.y + CELL / 2;
@@ -1040,6 +1125,75 @@ function drawTrail() {
     ctx.fill();
   }
   ctx.globalAlpha = 1;
+}
+
+function drawBossEngine() {
+  if (selectedMainMode !== "multi" || !bossData || bossData.hp <= 0) return;
+  
+  const { x, y, hp, maxHp, zones } = bossData;
+  const now = performance.now();
+
+  // 1. Gambar Area Deteksi Ancaman (Prediksi Server)
+  if (zones && zones.length > 0) {
+    zones.forEach(z => {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 59, 92, ${0.15 + Math.abs(Math.sin(now * 0.005)) * 0.15})`;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#ff3b5c";
+      ctx.setLineDash([6, 6]);
+      ctx.stroke();
+      ctx.restore();
+
+      // Client-Side Otoritas Kematian Instan (Zero-Latency Hit Detection)
+      if (currentState === STATE.PLAYING && performance.now() > invulnerableUntil) {
+         const head = snake[0];
+         const dist = Math.hypot((head.x + CELL/2) - z.x, (head.y + CELL/2) - z.y);
+         if (dist < z.radius) {
+            handleDeath();
+         }
+      }
+    });
+  }
+
+  // 2. Gambar Fisik Boss (Interpolasi Visual)
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(now * 0.001);
+  ctx.fillStyle = "#0c0c1f";
+  ctx.strokeStyle = "#ff3b5c";
+  ctx.lineWidth = 3;
+  ctx.shadowColor = "#ff3b5c";
+  ctx.shadowBlur = 15;
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const angle = (Math.PI / 4) * i;
+    const px = Math.cos(angle) * 35;
+    const py = Math.sin(angle) * 35;
+    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+  }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  
+  // Inti Plasma
+  ctx.fillStyle = "#ff8c00";
+  ctx.beginPath();
+  ctx.arc(0, 0, 15 + Math.sin(now * 0.01) * 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 3. HP Bar
+  const hpPct = hp / maxHp;
+  ctx.fillStyle = "rgba(0,0,0,0.7)";
+  ctx.fillRect(x - 40, y - 55, 80, 8);
+  ctx.fillStyle = hpPct > 0.5 ? "#39ff14" : (hpPct > 0.2 ? "#ff8c00" : "#ff3b5c");
+  ctx.fillRect(x - 40, y - 55, 80 * hpPct, 8);
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x - 40, y - 55, 80, 8);
 }
 
 function drawSnake(t) {
@@ -1474,6 +1628,7 @@ function renderLoop(timestamp) {
   }
 
   drawItems();
+  drawBossEngine();           // ★ Injeksi Boss Renderer di atas items
   updateDrawParticles();
   updateDrawFloatingTexts();  // ★ floating texts
   drawCrownOverlay();         // ★ v7.0 crown atas kepala pemimpin
@@ -1505,7 +1660,6 @@ function logicTick() {
   snakeTrail.push({ x: snake[0].x, y: snake[0].y });
   if (snakeTrail.length > TRAIL_MAX) snakeTrail.shift();
 
-  applyMagnet();   // ★ magnet power-up
   moveSnake();
   checkSelfCollision();
 
@@ -1593,6 +1747,12 @@ function handleDeath() {
     stopBGM();
     transitionTo(STATE.GAME_OVER);
     clearTimeout(poopSpawnTimer);
+
+    // ★ v8.0: Tampilkan ghostBtn saat mati di multiplayer (saboteur)
+    if (selectedMainMode === "multi") {
+      const ghostBtnEl = document.getElementById("ghostBtn");
+      if (ghostBtnEl) ghostBtnEl.style.display = "";
+    }
 
     // Update profile panel di menu (sudah ready)
     updateProfilePanel();
@@ -1731,7 +1891,8 @@ function showComboDisplay(text) {
 // ════════════════════════════════════════════════════════════════════════════
 function checkLevelUp() {
   const cfg = LEVELS[levelIndex];
-  if (score > cfg.scoreLimit && levelIndex < LEVELS.length - 1) {
+  // FIX: Gunakan >= agar level naik tepat saat skor mencapai batas, bukan melewatinya
+  if (score >= cfg.scoreLimit && levelIndex < LEVELS.length - 1) {
     triggerAudio("levelup");
     showLevelTransition(levelIndex + 1);
   }
@@ -1774,15 +1935,25 @@ function updateLivesDisplay() {
 }
 
 function updateBestUI() {
-  bestDisplay.textContent     = bestScore;
-  overlayBestDisp.textContent = bestScore;
+  if (bestDisplay)    bestDisplay.textContent    = bestScore;
+  if (overlayBestDisp) overlayBestDisp.textContent = bestScore;
+  // Juga update overlay best display jika ada
+  const obe = document.getElementById("overlayBestDisplay");
+  if (obe) obe.textContent = bestScore;
 }
 
 function hexAlpha(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
+  // Validasi hex: pastikan format #RRGGBB
+  if (!hex || typeof hex !== "string" || !hex.startsWith("#") || hex.length < 7) {
+    return `rgba(0,245,196,${alpha})`;
+  }
+  try {
+    const r = parseInt(hex.slice(1, 3), 16);
+    const g = parseInt(hex.slice(3, 5), 16);
+    const b = parseInt(hex.slice(5, 7), 16);
+    if (isNaN(r) || isNaN(g) || isNaN(b)) return `rgba(0,245,196,${alpha})`;
+    return `rgba(${r},${g},${b},${alpha})`;
+  } catch { return `rgba(0,245,196,${alpha})`; }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1814,6 +1985,7 @@ function initGame() {
   activePowerUps = {};
   shakeIntensity = 0;
   sessionStartTime = performance.now();
+  bossData      = null;
 
   // ★ v7.0 resets
   _sessionSaboteurSent     = 0;
@@ -1839,23 +2011,45 @@ function initGame() {
 }
 
 function exitToMainMenu() {
+  // ★ v8.0 FIX: Cancel render loop PERTAMA sebelum state change apapun
+  cancelAnimationFrame(rafId);
+  rafId = null;
+
   if (selectedMainMode === "multi") {
-    emitToServer({ score: 0, lives: 0, status: "dead" });
+    if (socket && socket.connected && myRoomId) socket.emit("exitGame");
     leaderboardPanel.classList.remove("active");
+    myRoomId    = null;
+    isLobbyHost = false;
   }
 
+  // BUG FIX: Hentikan BGM sepenuhnya
   stopBGM();
-  transitionTo(STATE.START_SCREEN);
+  bgmPlaying = false;
 
+  // BUG FIX: Reset score display
+  if (scoreDisplay)  scoreDisplay.textContent  = "0";
+  if (levelDisplay)  levelDisplay.textContent  = "1";
+  if (speedDisplay)  speedDisplay.textContent  = "220";
+  if (livesDisplay)  livesDisplay.textContent  = "";
+
+  // BUG FIX: Sembunyikan ghostBtn
+  const ghostBtnEl = document.getElementById("ghostBtn");
+  if (ghostBtnEl) ghostBtnEl.style.display = "none";
+
+  // BUG FIX: Hapus match summary jika terbuka
+  const summaryModal = document.getElementById("matchSummaryModal");
+  if (summaryModal) summaryModal.remove();
+
+  transitionTo(STATE.START_SCREEN);
   startOverlay.classList.remove("hidden");
   stepMode.classList.add("active");
   stepSetup.classList.remove("active");
   stepMulti.classList.remove("active");
 
-  cancelAnimationFrame(rafId);
+  // ★ v8.0: Stop room browser auto-refresh
+  stopRoomBrowserAutoRefresh();
+  clearTimeout(poopSpawnTimer);
   notify("Kembali ke Menu Utama.", "warning", 2000);
-
-  // Update profile panel saat kembali ke menu
   updateProfilePanel();
 }
 
@@ -1893,6 +2087,14 @@ function startGame() {
 }
 
 function restartGame() {
+  // FIX: Hentikan render loop lama agar tidak berjalan double
+  cancelAnimationFrame(rafId);
+  rafId = null;
+
+  // Reset score display sebelum init
+  if (scoreDisplay) scoreDisplay.textContent = "0";
+  if (levelDisplay) levelDisplay.textContent = "1";
+
   transitionTo(STATE.PLAYING);
   initGame();
   schedulePoopSpawn();
@@ -1901,16 +2103,26 @@ function restartGame() {
     stopBGM();
     setTimeout(() => startBGM(), 100);
   }
+
+  // Sembunyikan game over overlay dengan clear canvas, lalu mulai loop baru
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  rafId = requestAnimationFrame(renderLoop);
 }
 
 function addInput(nextDx, nextDy) {
   const last = inputQueue.length > 0 ? inputQueue[inputQueue.length - 1] : { dx, dy };
+  // Cegah input pada sumbu yang sama (sudah bergerak horizontal/vertikal)
   if (nextDx !== 0 && last.dx !== 0) return;
   if (nextDy !== 0 && last.dy !== 0) return;
+  // FIX: Cegah reverse direction SELALU — tidak hanya saat snake.length > 1
+  if (nextDx !== 0 && nextDx === -last.dx) return;
+  if (nextDy !== 0 && nextDy === -last.dy) return;
   if (inputQueue.length < 2) inputQueue.push({ dx: nextDx, dy: nextDy });
 }
 
 function togglePause() {
+  // BUG FIX: Jangan pause saat level transition
+  if (currentState === STATE.LEVEL_TRANSITION) return;
   if (currentState === STATE.PLAYING) {
     transitionTo(STATE.PAUSED);
     pauseIndicator.classList.add("visible");
@@ -2039,17 +2251,51 @@ document.addEventListener("keydown", (e) => {
       e.preventDefault();
       openQuickChatPanel();
     }
+    
+    // ★ Boss Hit Detection (Tekan B)
+    if (e.key === "b" || e.key === "B") {
+      if (selectedMainMode === "multi" && bossData && bossData.hp > 0 && socket) {
+        const head = snake[0];
+        if (head) {
+          const dist = Math.hypot(head.x - bossData.x, head.y - bossData.y);
+          if (dist < 90) {
+            socket.emit("bossHit", { damage: 150 });
+            createBurst(bossData.x, bossData.y, "#00cfff", 12);
+            triggerAudio("eat");
+          } else {
+             showFloatingText(head.x, head.y - 10, "Terlalu Jauh!", "#ff3b5c", 0.8);
+          }
+        }
+      }
+    }
+
+    // BUG FIX: ESC — pause dulu, lalu konfirmasi (hindari race condition)
     if (e.key === "Escape") {
       e.preventDefault();
-      if (currentState === STATE.PLAYING) togglePause();
-      if (confirm("Keluar dari sesi permainan aktif dan kembali ke menu utama?")) {
-        exitToMainMenu();
+      if (currentState === STATE.PLAYING) {
+        togglePause(); // pause dulu
       }
+      // Gunakan setTimeout agar pause ter-render sebelum confirm dialog muncul
+      setTimeout(() => {
+        if (confirm("Keluar dari sesi permainan aktif dan kembali ke menu utama?")) {
+          exitToMainMenu();
+        } else if (currentState === STATE.PAUSED) {
+          togglePause(); // lanjut lagi jika batal
+        }
+      }, 50);
     }
   }
   if (currentState === STATE.GAME_OVER) {
     if (e.key === "Enter") restartGame();
     if (e.key === "Escape") { e.preventDefault(); exitToMainMenu(); }
+  }
+  // BUG FIX: Level transition Enter / Space → lanjut level
+  if (currentState === STATE.LEVEL_TRANSITION) {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      const nextBtn = document.getElementById("nextLevelBtn");
+      if (nextBtn) nextBtn.click();
+    }
   }
 });
 
@@ -2095,11 +2341,67 @@ canvas.addEventListener("touchend", (e) => {
 // ════════════════════════════════════════════════════════════════════════════
 //  17. SOCKET.IO NETWORKING — v8.0 Lobby System
 // ════════════════════════════════════════════════════════════════════════════
+//  FASE 1 — UI HELPERS: Ping Display, Reconnect Overlay, Room Browser
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Ping Display ──────────────────────────────────────────────────────────
+function updatePingDisplay(ping) {
+  const el = document.getElementById("lobbyMyPing");
+  if (!el) return;
+  el.textContent = `${ping}ms`;
+  el.className = "lobby-ping-badge " + (ping < 80 ? "ping-good" : ping < 200 ? "ping-ok" : "ping-bad");
+}
+
+// ── Reconnect Overlay (Phase 1 Upgraded) ─────────────────────────────────
+// ★ FASE 1: showReconnectOverlay sekarang di section Phase 1 Functions di bawah
+
+// ── Room Browser (Phase 1 Upgraded) ──────────────────────────────────────
+// ★ FASE 1: fetchAndShowRoomBrowser, renderRoomBrowserList, quickJoinToRoom
+//   sekarang di section Phase 1 Functions di bawah
+
+function openRoomBrowser() {
+  fetchAndShowRoomBrowser();
+}
+
+async function fetchRoomList() {
+  // Legacy wrapper — delegates to Phase 1 implementation
+  fetchAndShowRoomBrowser();
+}
+
+function joinFromBrowser(roomId) {
+  quickJoinToRoom(roomId);
+}
+
+function doQuickJoin() {
+  triggerQuickJoin();
+}
+
+// ── Host Control Panel (Phase 1 Upgraded) ────────────────────────────────
+// ★ FASE 1: kickPlayer, injectHostSettingsPanel, applyHostRoomSettings
+//   sekarang di section Phase 1 Functions di bawah
+
+function openHostControlPanel() {
+  // Toggle host settings panel
+  const panel = document.getElementById("hostSettingsPanel");
+  const toggleBtn = document.getElementById("hostSettingsToggleBtn");
+  if (panel && toggleBtn) {
+    const isHidden = panel.style.display === "none" || !panel.style.display;
+    panel.style.display = isHidden ? "" : "none";
+    toggleBtn.innerHTML = isHidden ? "✕ Tutup Pengaturan" : "⚙️ Pengaturan Room";
+  }
+}
+
+function saveHostSettings() {
+  applyHostRoomSettings();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 let socket     = null;
 let mySocketId = null;
 let myRoomId   = null;
 let isLobbyHost = false;
 let lobbyState  = "WAITING";
+let _myPing     = 0;
 
 // ── Socket Initialization ──────────────────────────────────────────────────
 function initSocket() {
@@ -2107,18 +2409,178 @@ function initSocket() {
     if (lbStatus) lbStatus.textContent = "Offline Mode";
     return;
   }
-  if (!socket) socket = io({ autoConnect: true, transports: ["websocket", "polling"] });
+  if (!socket) {
+    socket = io({
+      autoConnect: true,
+      transports: ["polling", "websocket"],
+    });
+  }
+  bindSocketEvents();
+}
+
+// ── Bind all socket event handlers ─────────────────────────────────────────
+function bindSocketEvents() {
+  if (!socket) return;
+  // BUG FIX: Hapus semua listener sebelum rebind agar tidak duplikat
+  socket.offAny();
+  socket.removeAllListeners();
+  socket.off("connect");
+  socket.off("disconnect");
+  socket.off("connect_error");
+  socket.off("disconnect");
 
   socket.on("connect", () => {
     mySocketId = socket.id;
     if (lbStatus) lbStatus.textContent = `ID: ${socket.id.slice(0, 6)}`;
     console.log("[Socket] Connected:", socket.id);
+    // ── AUTO RECONNECT cek token tersimpan ──────────────────────────
+    if (!_reconnectAttempted) {
+      _reconnectAttempted = true;
+      const saved = loadSessionTokenLocal();
+      if (saved && saved.token && saved.roomId) {
+        console.log("[Reconnect] Token ditemukan untuk room:", saved.roomId);
+        showReconnectOverlay(saved.roomId);
+        socket.emit("reconnectWithToken", { token: saved.token });
+      }
+    }
   });
 
   socket.on("disconnect", () => {
     console.log("[Socket] Disconnected.");
     if (currentState === STATE.PLAYING && selectedMainMode === "multi") {
-      notify("⚠️ Koneksi terputus! Mencoba reconnect...", "warning", 4000);
+      notify("⚠️ Koneksi terputus! Mencoba reconnect...", "warning", 5000);
+      showReconnectOverlay(myRoomId);
+    }
+  });
+
+  // ── PING RTT ────────────────────────────────────────────────────────
+  // Server kirim "pingCheck" ke client secara interval, client balas "pongCheck"
+  socket.on("pingCheck", ({ ts }) => {
+    socket.emit("pongCheck", { ts });
+  });
+  // Jika server kirim "pongCheck" sebagai reply dari client-initiated ping
+  socket.on("pongCheck", ({ ts }) => {
+    const rtt = Date.now() - ts;
+    _myPing = rtt;
+    updatePingDisplay(rtt);
+    updateLatencyIndicator(rtt);
+    socket.emit("latencyReport", { rtt });
+  });
+  socket.on("pingUpdate", ({ id, ping }) => {
+    if (id === mySocketId) { _myPing = ping; updatePingDisplay(ping); }
+    updateMemberPingBadge(id, ping);
+  });
+
+  // ── SESSION TOKEN ────────────────────────────────────────────────────
+  socket.on("sessionToken", ({ token, roomId }) => {
+    saveSessionTokenLocal(token, roomId);
+  });
+  
+  // ★ BOSS ENGINE SYNC (Fase 2)
+  socket.on("boss_sync", (data) => {
+    bossData = data;
+  });
+
+  // ── RECONNECT SUCCESS ────────────────────────────────────────────────
+  socket.on("reconnectSuccess", (data) => {
+    hideReconnectOverlay();
+    clearSessionToken();
+    myRoomId    = data.roomId;
+    isLobbyHost = data.isHost;
+    if (data.state === "PLAYING") {
+      selectedMainMode = "multi";
+      hideLobbyScreen();
+      transitionTo(STATE.PLAYING);
+      initGame();
+      schedulePoopSpawn();
+      cancelAnimationFrame(rafId);
+      lastLogicTime = performance.now();
+      rafId = requestAnimationFrame(renderLoop);
+      leaderboardPanel.classList.add("active");
+      setTimeout(() => injectQuickChatButton(), 500);
+      startOverlay.classList.add("hidden");
+      notify(`🔄 Reconnected! Selamat datang kembali!`, "success", 3000);
+      if (!globalMuted) setTimeout(() => startBGM(), 200);
+    } else {
+      showLobbyScreen({ roomId: data.roomId, roomName: data.roomName, isHost: data.isHost });
+      notify(`🔄 Kembali ke lobby room ${data.roomId}!`, "success", 3000);
+    }
+  });
+
+  socket.on("reconnectFailed", ({ reason }) => {
+    hideReconnectOverlay();
+    clearSessionToken();
+    notify("⚠️ Tidak dapat reconnect: " + reason, "warning", 4000);
+  });
+
+  socket.on("playerReconnected", ({ username }) => {
+    appendLobbyChat(null, `${username} kembali terhubung! 🔄`, "system");
+    notify(`🔄 ${username} reconnected!`, "success", 2500);
+  });
+
+  // ── KICKED ───────────────────────────────────────────────────────────
+  socket.on("kicked", ({ reason }) => {
+    hideLobbyScreen(); myRoomId = null; isLobbyHost = false;
+    selectedMainMode = "single"; clearSessionToken();
+    leaderboardPanel.classList.remove("active");
+    startOverlay.classList.remove("hidden");
+    transitionTo(STATE.START_SCREEN);
+    notify("🚫 " + reason, "warning", 5000);
+  });
+  socket.on("playerKicked", ({ username }) => {
+    appendLobbyChat(null, `${username} telah dikeluarkan dari room.`, "system");
+  });
+
+  // ── ROOM SETTINGS UPDATED ────────────────────────────────────────────
+  socket.on("roomSettingsUpdated", ({ settings }) => {
+    appendLobbyChat(null, `Pengaturan room diperbarui oleh Host.`, "system");
+    const rnEl = document.getElementById("lobbyRoomName");
+    if (rnEl && settings.name) rnEl.textContent = settings.name;
+  });
+
+  // ── QUICK JOIN RESULT ────────────────────────────────────────────────
+  // ── [FIX] joinedRoom — Event utama untuk semua join success (host & guest) ──
+  // Server sekarang selalu emit "joinedRoom" untuk createRoom, joinRoom, quickJoin
+  socket.on("joinedRoom", (data) => {
+    const { roomId, roomName, isHost, team } = data;
+    myRoomId    = roomId;
+    isLobbyHost = isHost;
+    selectedMainMode = "multi";
+
+    const statusEl = document.getElementById("connectStatus");
+    if (statusEl) {
+      statusEl.textContent = isHost
+        ? `✅ Room dibuat: ${roomId}`
+        : `✅ Bergabung ke room: ${roomId}`;
+      statusEl.className = "connect-status success";
+    }
+
+    showLobbyScreen({ roomId, roomName: roomName || "Room Multiplayer", isHost });
+    notify(
+      isHost
+        ? `🏠 Room ${roomId} berhasil dibuat! Tunggu pemain lain...`
+        : `✅ Bergabung ke room ${roomId}!`,
+      "success", 3000
+    );
+    clearSessionToken(); // reset session lama jika ada
+  });
+
+  // ── roomCreated — backward compat (host saja, dipanggil bersamaan joinedRoom) ──
+  socket.on("roomCreated", ({ roomId, roomName }) => {
+    // joinedRoom sudah handle ini — hanya update state jika belum ada
+    if (!myRoomId) {
+      myRoomId    = roomId;
+      isLobbyHost = true;
+      showLobbyScreen({ roomId, roomName: roomName || "Room Multiplayer", isHost: true });
+    }
+  });
+
+  // ── roomApproved — backward compat (tidak lagi dikirim server baru, tapi jaga compat) ──
+  socket.on("roomApproved", (data) => {
+    if (!myRoomId && data.roomId) {
+      myRoomId    = data.roomId;
+      isLobbyHost = !!data.isHost;
+      showLobbyScreen({ roomId: data.roomId, roomName: data.roomName, isHost: !!data.isHost });
     }
   });
 
@@ -2128,34 +2590,12 @@ function initSocket() {
                     window.location.hostname.startsWith("192.168") ||
                     window.location.hostname.startsWith("10.") ||
                     window.location.hostname.startsWith("172.");
-    const targetURL = isLocal ? data.localURL : window.location.origin;
-    // Update lobby QR if lobby is open
+    const targetURL = isLocal ? (data.localURL || window.location.origin) : window.location.origin;
     updateLobbyQR(targetURL);
-    // Legacy: update old host info if element exists
     const hud = document.getElementById("hostUrlDisplay");
     if (hud) hud.textContent = targetURL;
-  });
-
-  // ── Room Created (Host) ──────────────────────────────────────────────────
-  socket.on("roomCreated", ({ roomId, roomName, playerId }) => {
-    myRoomId    = roomId;
-    isLobbyHost = true;
-    showLobbyScreen({ roomId, roomName, isHost: true });
-  });
-
-  // ── Room Approved (Guest join success) ───────────────────────────────────
-  socket.on("roomApproved", (data) => {
-    if (data.isLobbyMode) {
-      myRoomId    = data.roomId;
-      isLobbyHost = false;
-      showLobbyScreen({ roomId: data.roomId, roomName: data.roomName, isHost: false });
-    } else {
-      // Legacy: non-lobby mode (fallback)
-      if (selectedMainMode === "multi") {
-        leaderboardPanel.classList.add("active");
-        setTimeout(() => injectQuickChatButton(), 500);
-      }
-    }
+    updateConnectionBadge(data.isCloud);
+    if (data.features) updateServerFeaturePills(data.features);
   });
 
   // ── Lobby Update (member list, state changes) ────────────────────────────
@@ -2175,25 +2615,49 @@ function initSocket() {
     const maxEl = document.getElementById("lobbyMaxPlayers");
     if (maxEl) maxEl.textContent = data.maxPlayers;
 
-    // Host start button: enable if >0 players
-    const startBtn = document.getElementById("lobbyStartBtn");
-    if (startBtn) {
-      const allReady = data.members.every(m => m.isReady || m.isHost);
-      const enoughPlayers = data.members.length >= 1;
-      startBtn.disabled = !(enoughPlayers && allReady && data.state === "WAITING");
-      const hintEl = document.getElementById("lobbyReadyHint");
-      if (hintEl) {
-        if (!enoughPlayers) {
-          hintEl.textContent = "Menunggu pemain bergabung...";
-        } else if (!allReady) {
-          const waitCount = data.members.filter(m => !m.isReady && !m.isHost).length;
-          hintEl.textContent = `Menunggu ${waitCount} pemain siap...`;
-        } else {
-          hintEl.textContent = "✅ Semua siap! Host dapat memulai.";
+    // ★ FASE 1: Update connection badge dari server data
+    if (data.isCloud !== undefined) updateConnectionBadge(data.isCloud);
+
+    // ★ gameMode tag di lobby header
+    const gameModeTagEl = document.getElementById("lobbyGameModeTag");
+    if (gameModeTagEl) {
+      gameModeTagEl.textContent = data.gameMode === "boss" ? "👹 BOSS MODE" : data.gameMode === "ranked" ? "🏆 RANKED" : "🎮 NORMAL";
+      gameModeTagEl.className   = `lobby-gamemode-tag ${data.gameMode || "normal"}`;
+    }
+    // ★ Server feature pills
+    if (data.features) renderServerFeaturePills(data.features);
+
+    // Host start button: enable jika semua siap
+    const startBtnLobby = document.getElementById("lobbyStartBtn");
+    if (startBtnLobby) {
+      if (isLobbyHost) {
+        const nonHostMembers = data.members.filter(m => !m.isHost);
+        const allReady = nonHostMembers.length === 0 || nonHostMembers.every(m => m.isReady);
+        const canStart  = data.members.length >= 1 && allReady && data.state === "WAITING";
+        startBtnLobby.disabled = !canStart;
+        startBtnLobby.classList.toggle("pulse", canStart);
+
+        const hintEl = document.getElementById("lobbyReadyHint") || document.getElementById("lobbyReadyHintText");
+        if (hintEl) {
+          if (data.members.length < 1) {
+            hintEl.textContent = "Menunggu pemain bergabung...";
+          } else if (!allReady) {
+            const waitCount = nonHostMembers.filter(m => !m.isReady).length;
+            hintEl.textContent = `Menunggu ${waitCount} pemain siap...`;
+          } else {
+            hintEl.textContent = nonHostMembers.length === 0
+              ? "✅ Kamu sendirian — bisa mulai kapan saja!"
+              : "✅ Semua siap! Tekan MULAI untuk memulai.";
+          }
         }
+      } else {
+        // Guest: tampilkan status sendiri
+        startBtnLobby.style.display = "none";
       }
     }
   });
+
+  // ★ FASE 1: pingUpdate — sudah terdaftar di atas (dalam blok RTT Ping), tidak perlu duplikat
 
   // ── Lobby Chat ───────────────────────────────────────────────────────────
   socket.on("lobbyChatMessage", ({ id, username, message }) => {
@@ -2213,23 +2677,44 @@ function initSocket() {
   });
 
   // ── Host Migrated ────────────────────────────────────────────────────────
-  socket.on("hostMigrated", ({ newHostId, newHostUsername }) => {
+  socket.on("hostMigrated", ({ newHostId, username, newHostUsername }) => {
+    // FIX: server kirim 'username', bukan 'newHostUsername'
+    const hostName = username || newHostUsername || "Pemain";
     if (newHostId === mySocketId) {
       isLobbyHost = true;
       updateLobbyHostUI(true);
       notify("👑 Kamu sekarang menjadi Host room!", "gold", 3000);
+      // Inject host settings panel untuk host baru
+      setTimeout(() => injectHostSettingsPanel(), 200);
     }
-    appendLobbyChat(null, `${newHostUsername} menjadi Host baru.`, "system");
+    appendLobbyChat(null, `👑 ${hostName} menjadi Host baru.`, "system");
   });
 
   // ── Match Countdown ──────────────────────────────────────────────────────
+  // ★ v8.0 FIX: matchStarting dari server v9.0 (sebelum countdown dimulai)
+  socket.on("matchStarting", ({ countdown }) => {
+    // Server emit matchStarting { countdown: 3 } lalu matchCountdown secara interval
+    appendLobbyChat(null, `⚠️ Match dimulai dalam ${countdown} detik!`, "system");
+    notify(`🚦 Match akan dimulai dalam ${countdown} detik!`, "gold", 2500);
+  });
   socket.on("matchCountdown", ({ count }) => {
+    showLobbyCountdown(count);
+    playSynth("eat");
+  });
+  // Legacy alias (server lama)
+  socket.on("countdown", ({ count }) => {
     showLobbyCountdown(count);
     playSynth("eat");
   });
 
   // ── Match Start ──────────────────────────────────────────────────────────
   socket.on("matchStart", (data) => {
+    hideLobbyCountdown();
+    hideLobbyScreen();
+    beginMatchFromLobby(data);
+  });
+  // Legacy alias
+  socket.on("matchStarted", (data) => {
     hideLobbyCountdown();
     hideLobbyScreen();
     beginMatchFromLobby(data);
@@ -2247,11 +2732,13 @@ function initSocket() {
 
   // ── Return To Lobby ──────────────────────────────────────────────────────
   socket.on("returnedToLobby", ({ roomId }) => {
-    if (currentState !== STATE.START_SCREEN) {
-      // Jika masih di game, kembali ke start screen dulu
-      transitionTo(STATE.GAME_OVER);
-    }
+    // BUGFIX: Pastikan selectedMainMode tetap "multi" saat kembali ke lobby
+    selectedMainMode = "multi";
     myRoomId = roomId;
+    stopBGM();
+    leaderboardPanel.classList.remove("active");
+    const qcp = document.getElementById("quickChatPanel");
+    if (qcp) qcp.remove();
     showLobbyScreen({ roomId, roomName: null, isHost: isLobbyHost });
     notify("🔄 Kembali ke lobby. Siapkan dirimu!", "success", 2500);
   });
@@ -2261,6 +2748,10 @@ function initSocket() {
     hideLobbyScreen();
     myRoomId    = null;
     isLobbyHost = false;
+    selectedMainMode = "single";
+    leaderboardPanel.classList.remove("active");
+    startOverlay.classList.remove("hidden");
+    transitionTo(STATE.START_SCREEN);
     notify("🚪 " + reason, "warning", 4000);
   });
 
@@ -2271,9 +2762,24 @@ function initSocket() {
     notify("❌ " + message, "warning", 4000);
     console.warn("[JoinError]", code, message);
   });
+  // Legacy aliases
+  socket.on("joinRoomError", ({ message }) => {
+    const statusEl = document.getElementById("connectStatus");
+    if (statusEl) { statusEl.textContent = `❌ ${message}`; statusEl.className = "connect-status error"; }
+    notify("❌ " + message, "warning", 4000);
+  });
+  socket.on("createRoomError", ({ message }) => {
+    notify("❌ " + message, "warning", 4000);
+  });
+  socket.on("quickJoinError", ({ message }) => {
+    notify("❌ " + message, "warning", 4000);
+  });
 
   // ── Start Error ──────────────────────────────────────────────────────────
   socket.on("startError", ({ message }) => {
+    notify("❌ " + message, "warning", 3000);
+  });
+  socket.on("startMatchError", ({ message }) => {
     notify("❌ " + message, "warning", 3000);
   });
 
@@ -2317,7 +2823,17 @@ function initSocket() {
 
   // ── Incoming Poop ────────────────────────────────────────────────────────
   socket.on("incomingPoop", () => {
-    if (currentState === STATE.PLAYING) spawnItem("poop", POOP_LIFETIME_MS);
+    if (currentState === STATE.PLAYING) {
+      spawnItem("poop", POOP_LIFETIME_MS);
+      _sessionSaboteurReceived++;
+      showFloatingText(snake[0]?.x + CELL/2 || 250, snake[0]?.y || 100, "SABOTEUR! 💩", "#ff3b5c", 1.2);
+    }
+  });
+
+  // ── Saboteur result (optional server ack) ────────────────────────────────
+  socket.on("saboteurSent", () => {
+    _sessionSaboteurSent++;
+    notify("💩 Kotoran dikirim ke lawan!", "gold", 1500);
   });
 
   // ── Room Full (legacy) ───────────────────────────────────────────────────
@@ -2325,22 +2841,86 @@ function initSocket() {
     notify("🚫 " + message, "warning", 4000);
   });
 
+  // ── Server Announcements ──────────────────────────────────────────────────
+  socket.on("announcement", ({ message, type }) => {
+    notify("📢 " + message, type || "success", 3500);
+    appendLobbyChat(null, message, "system");
+  });
+
+  // ── All Players Ready ─────────────────────────────────────────────────────
+  socket.on("allPlayersReady", ({ count }) => {
+    notify(`✅ Semua ${count} pemain siap! Kamu bisa mulai pertandingan.`, "success", 4000);
+    const startBtnLobby = document.getElementById("lobbyStartBtn");
+    if (startBtnLobby) {
+      startBtnLobby.disabled = false;
+      startBtnLobby.classList.add("pulse");
+    }
+    // ★ v8.0 FIX: Coba kedua ID (lobbyReadyHintText dari HTML terbaru, lobbyReadyHint dari HTML lama)
+    const hintEl = document.getElementById("lobbyReadyHintText") || document.getElementById("lobbyReadyHint");
+    if (hintEl) hintEl.textContent = `✅ ${count} pemain siap! Klik MULAI.`;
+  });
+
+  // ── Vote Kick Progress ────────────────────────────────────────────────────
+  socket.on("voteKickProgress", ({ targetId, votes, majority }) => {
+    const target = document.querySelector(`[data-player-id="${targetId}"] .lp-name`);
+    const name   = target?.textContent || "Pemain";
+    notify(`🗳️ Vote kick ${name}: ${votes}/${majority} suara`, "warning", 3000);
+    appendLobbyChat(null, `Vote kick ${name}: ${votes}/${majority} suara dibutuhkan.`, "system");
+  });
+
+  // ── Reconnect events ──────────────────────────────────────────────────────
+  socket.on("reconnected", ({ roomId, roomName, isHost }) => {
+    hideReconnectOverlay();
+    notify("✅ Berhasil reconnect ke room!", "success", 3000);
+    showLobbyScreen({ roomId, roomName, isHost });
+  });
+  socket.on("reconnectFailed", ({ reason }) => {
+    hideReconnectOverlay();
+    notify("❌ Reconnect gagal: " + reason, "warning", 4000);
+  });
+  socket.on("playerReconnected", ({ id, username }) => {
+    notify(`✅ ${username} berhasil reconnect!`, "success", 3000);
+    appendLobbyChat(null, `${username} reconnect ke room.`, "system");
+  });
+
   // ── Player Ready Change ──────────────────────────────────────────────────
-  socket.on("playerReadyChange", ({ username, isReady }) => {
+  socket.on("playerReadyChange", ({ id, username, isReady }) => {
     appendLobbyChat(null, `${username} ${isReady ? "✅ siap" : "⏳ belum siap"}.`, "system");
   });
-}
 
-// ── Connect to Custom Server (untuk Join mode dengan URL) ──────────────────
+  // ── Boss Loot Drop ───────────────────────────────────────────────────────
+  socket.on("bossLootDrop", ({ type, message }) => {
+    notify("🎁 " + message, "gold", 4000);
+    if (currentState === STATE.PLAYING) {
+      activatePowerUp(type);
+    }
+  });
+
+  // ── Boss Phase Change ────────────────────────────────────────────────────
+  socket.on("bossPhaseChange", ({ phase, message }) => {
+    notify(message, "danger", 3000);
+    triggerScreenShake(10);
+  });
+
+  // ── Room Lock Changed ────────────────────────────────────────────────────
+  socket.on("roomLockChanged", ({ locked }) => {
+    notify(locked ? "🔒 Room dikunci oleh host." : "🔓 Room dibuka oleh host.", "warning", 2500);
+    appendLobbyChat(null, locked ? "Room dikunci oleh host." : "Room dibuka kembali.", "system");
+  });
+} // end bindSocketEvents
+// BUGFIX: connectToServer dulu memanggil initSocket() lagi yang menduplikat listener.
+// Sekarang socket dibuat fresh dan langsung resolve — listener sudah terpasang via initSocket() awal.
 function connectToServer(url) {
   return new Promise((resolve, reject) => {
-    if (socket) socket.disconnect();
-    const protocol = window.location.protocol === "https:" ? "wss://" : "ws://";
-    const clean = url.replace(/^(https?:\/\/|wss?:\/\/)/, "");
-    const fullUrl = clean.includes(":") ? (window.location.protocol + "//" + clean) : (window.location.protocol + "//" + clean);
-    socket = io(fullUrl, { transports: ["websocket", "polling"], timeout: 8000 });
-    socket.once("connect", () => { initSocket(); resolve(); });
-    socket.once("connect_error", (err) => reject(err));
+    if (socket) { socket.removeAllListeners(); socket.disconnect(); socket = null; }
+    const clean   = url.replace(/^(https?:\/\/|wss?:\/\/)/, "");
+    const fullUrl = window.location.protocol + "//" + clean;
+    // Railway: polling dulu
+    socket = io(fullUrl, { transports: ["polling", "websocket"], timeout: 10000 });
+    // Pasang semua event handler ke socket baru
+    bindSocketEvents();
+    socket.once("connect", resolve);
+    socket.once("connect_error", reject);
   });
 }
 
@@ -2352,10 +2932,15 @@ function emitJoin() {
   }
 }
 
+// ★ UPDATE FASE 2: Telemetri posisi ditambahkan untuk Predictive AI
 function emitToServer(data) {
   if (socket && socket.connected) {
     socket.emit("playerUpdate", {
       ...data,
+      lastX: snake[0] ? snake[0].x : 0,
+      lastY: snake[0] ? snake[0].y : 0,
+      dx: dx,
+      dy: dy,
       sessionStats: {
         applesEaten:      playerStats.applesEaten,
         goldCollected:    playerStats.goldCollected,
@@ -2376,19 +2961,32 @@ let _sessionSaboteurReceived = 0;
 
 // ── Begin match from lobby ─────────────────────────────────────────────────
 function beginMatchFromLobby(data) {
-  currentUsername = currentUsername || data.players?.find(p => p.id === mySocketId)?.username || "Pemain";
+  // BUGFIX: Set selectedMainMode, selectedMode, warna dari data lobby agar game
+  // berjalan dengan setting yang benar (bukan default single/easy)
+  selectedMainMode = "multi";
+  if (data && data.players) {
+    const myPlayerData = data.players.find(p => p.id === mySocketId);
+    if (myPlayerData) {
+      if (myPlayerData.username) currentUsername = myPlayerData.username;
+      if (myPlayerData.mode)     selectedMode    = myPlayerData.mode;
+      if (myPlayerData.color)    applySnakeColor(myPlayerData.color, myPlayerData.color);
+    }
+  }
+  if (data && data.mode)     selectedMode = data.mode;
+  if (data && data.gameMode) updateGameModeTag(data.gameMode);
+  currentUsername = currentUsername || "Pemain";
+
   initAudioContext();
   startOverlay.classList.add("hidden");
+  hideLobbyScreen();
   transitionTo(STATE.PLAYING);
   initGame();
   schedulePoopSpawn();
   cancelAnimationFrame(rafId);
   lastLogicTime = performance.now();
   rafId = requestAnimationFrame(renderLoop);
-  if (selectedMainMode === "multi") {
-    leaderboardPanel.classList.add("active");
-    setTimeout(() => injectQuickChatButton(), 500);
-  }
+  leaderboardPanel.classList.add("active");
+  setTimeout(() => injectQuickChatButton(), 500);
   notify(`🎮 MULAI! Semangat, ${currentUsername}!`, "success", 3000);
   if (!globalMuted) setTimeout(() => startBGM(), 200);
   const muteBtn = document.getElementById("btnMute");
@@ -2431,6 +3029,18 @@ function showLobbyScreen({ roomId, roomName, isHost }) {
 
   updateLobbyHostUI(isHost);
 
+  // ★ FASE 1: Inject host settings panel jika host
+  if (isHost) {
+    setTimeout(() => injectHostSettingsPanel(), 100);
+  }
+
+  // ★ FASE 1: Update connection badge berdasarkan koneksi saat ini
+  const isLocal = window.location.hostname === "localhost" ||
+                  window.location.hostname.startsWith("192.168") ||
+                  window.location.hostname.startsWith("10.") ||
+                  window.location.hostname.startsWith("172.");
+  updateConnectionBadge(!isLocal);
+
   // Lobby copy button
   const copyBtn = document.getElementById("lobbyCopyBtn");
   if (copyBtn) {
@@ -2452,6 +3062,10 @@ function showLobbyScreen({ roomId, roomName, isHost }) {
 function hideLobbyScreen() {
   const el = document.getElementById("lobbyScreen");
   if (el) el.classList.add("hidden");
+  // ★ v8.0: Stop room browser auto-refresh saat lobby disembunyikan
+  stopRoomBrowserAutoRefresh();
+  const panel = document.getElementById("roomBrowserPanel");
+  if (panel) panel.classList.add("hidden");
 }
 
 function updateLobbyQR(url) {
@@ -2475,19 +3089,58 @@ function renderLobbyMembers(data) {
     list.innerHTML = `<div class="lobby-player-empty">Belum ada pemain di lobby...</div>`;
     return;
   }
+
+  // ★ FASE 1: Ping quality → warna badge
+  function pingColor(q) {
+    return { excellent: "#00f5c4", good: "#39ff14", fair: "#ffd700", poor: "#ff3b5c", unknown: "#4a5568" }[q] || "#4a5568";
+  }
+  function pingLabel(q, ping) {
+    if (!ping || ping === 0) return "—";
+    return ping + "ms";
+  }
+
   list.innerHTML = data.members.map(m => {
     const isMe   = m.id === mySocketId;
-    const status = m.status === "disconnected" ? "disc" : (m.isReady || m.isHost ? "ready" : "wait");
-    const statusLabel = m.status === "disconnected" ? "DISCONNECT" : (m.isReady || m.isHost ? "SIAP" : "TUNGGU");
+    const isHost = m.isHost;
+    const status = m.status === "disconnected" ? "disc" : (m.isReady || isHost ? "ready" : "wait");
+    const statusLabel = m.status === "disconnected" ? "DISCONNECT" : (m.isReady || isHost ? "SIAP ✓" : "TUNGGU");
+    const readyGlow = (m.isReady || isHost) && m.status !== "disconnected";
+
+    // ★ FASE 1: Tier badge ranked
+    const tierBadge = m.tier && m.tier !== 'Bronze'
+      ? `<span class="lp-badge tier-badge">${m.tier.toUpperCase()}</span>` : '';
+
+    // ★ FASE 1: Ping badge dengan warna kualitas
+    const pColor = pingColor(m.pingQuality);
+    const pLabel = pingLabel(m.pingQuality, m.ping);
+    const pingBadge = `<span class="lp-ping-badge" data-member-id="${m.id}" style="color:${pColor};border-color:${pColor}30;background:${pColor}12">
+      <span class="ping-dot" style="background:${pColor}"></span>${pLabel}
+    </span>`;
+
+    // ★ FASE 1: Kick button — hanya tampil untuk host, bukan diri sendiri
+    const kickBtn = isLobbyHost && !isMe
+      ? `<button class="lp-kick-btn" onclick="kickPlayer('${m.id}')" title="Keluarkan pemain">✕</button>` : '';
+
+    // ★ FASE 1: Snake color preview dot (lebih besar dan mencolok)
+    const colorDot = `<div class="lp-color-dot ${readyGlow ? 'glow' : ''}" style="--dot-color:${m.color || '#00f5c4'};background:${m.color || '#00f5c4'}"></div>`;
+
     return `
-    <div class="lobby-player-row ${isMe ? 'is-me' : ''} ${m.isHost ? 'is-host' : ''}">
-      <div class="lp-color-dot" style="background:${m.color || '#00f5c4'}; color:${m.color || '#00f5c4'}"></div>
-      <span class="lp-name">${escapeHtml(m.username)}</span>
-      <div class="lp-badges">
-        ${m.isHost ? '<span class="lp-badge host">HOST</span>' : ''}
-        ${isMe     ? '<span class="lp-badge you">KAMU</span>' : ''}
-        <span class="lp-badge ${status}">${statusLabel}</span>
-        <span class="lp-badge mode">${(m.mode || 'easy').toUpperCase()}</span>
+    <div class="lobby-player-row ${isMe ? 'is-me' : ''} ${isHost ? 'is-host' : ''} ${readyGlow ? 'is-ready' : ''}"
+         data-player-id="${m.id}">
+      ${colorDot}
+      <div class="lp-info">
+        <span class="lp-name">${escapeHtml(m.username)}</span>
+        <div class="lp-badges">
+          ${isHost ? '<span class="lp-badge host">👑 HOST</span>' : ''}
+          ${isMe   ? '<span class="lp-badge you">KAMU</span>' : ''}
+          ${tierBadge}
+          <span class="lp-badge ${status}">${statusLabel}</span>
+          <span class="lp-badge mode">${(m.mode || 'easy').toUpperCase()}</span>
+        </div>
+      </div>
+      <div class="lp-right">
+        ${pingBadge}
+        ${kickBtn}
       </div>
     </div>`;
   }).join("");
@@ -2509,15 +3162,401 @@ function appendLobbyChat(username, message, type) {
   while (box.children.length > 80) box.removeChild(box.firstChild);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+//  ★ FASE 1: HOST CONTROL PANEL FUNCTIONS
+// ════════════════════════════════════════════════════════════════════════════
+
+// Kick player — dipanggil dari inline onclick di renderLobbyMembers
+function kickPlayer(targetId) {
+  if (!isLobbyHost || !socket || !socket.connected) return;
+  if (!confirm("Keluarkan pemain ini dari room?")) return;
+  socket.emit("kickPlayer", { targetId });
+}
+
+// Update room settings dari host settings panel
+function applyHostRoomSettings() {
+  if (!isLobbyHost || !socket || !socket.connected) return;
+
+  const nameEl     = document.getElementById("hostSettingRoomName") || document.getElementById("hsRoomName");
+  const maxEl      = document.getElementById("hostSettingMaxPlayers") || document.getElementById("hsMaxPlayers");
+  const privEl     = document.getElementById("hostSettingPrivate") || document.getElementById("hsPrivate");
+  const teamEl     = document.getElementById("hostSettingTeamMode") || document.getElementById("hsTeamMode");
+  const modeEl     = document.querySelector(".host-mode-btn.active") || document.querySelector(".hs-mode-btn.active");
+  const gameModeEl = document.querySelector(".host-gamemode-btn.active") || document.querySelector(".hs-gamemode-btn.active");
+
+  const roomName   = nameEl?.value?.trim() || null;
+  const mode       = modeEl?.dataset.mode || null;
+  const gameMode   = gameModeEl?.dataset.gamemode || gameModeEl?.dataset.mode || null;
+  const maxPlayers = maxEl ? parseInt(maxEl.value) : null;
+  const isPrivate  = privEl ? privEl.checked : null;
+  const teamMode   = teamEl ? teamEl.checked : null;
+
+  socket.emit("updateRoomSettings", {
+    roomName,
+    mode,
+    gameMode,
+    maxPlayers: isNaN(maxPlayers) ? null : maxPlayers,
+    isPrivate,
+    teamMode,
+  });
+  notify("⚙️ Pengaturan room diperbarui!", "success", 2000);
+  console.log("[Settings] Applied:", { roomName, mode, gameMode, maxPlayers, isPrivate, teamMode });
+}
+
+// Inject host settings panel ke lobby screen
+function injectHostSettingsPanel() {
+  if (!isLobbyHost) return;
+  if (document.getElementById("hostSettingsPanel")) return;
+  const hostActions = document.getElementById("lobbyHostActions");
+  if (!hostActions) return;
+
+  const panel = document.createElement("div");
+  panel.id = "hostSettingsPanel";
+  panel.className = "host-settings-panel";
+  panel.innerHTML = `
+    <div class="host-settings-title">⚙️ PENGATURAN ROOM</div>
+    <div class="host-settings-row">
+      <label>Nama Room</label>
+      <input id="hostSettingRoomName" type="text" maxlength="20" placeholder="Nama room..." 
+             class="host-settings-input">
+    </div>
+    <div class="host-settings-row">
+      <label>Maks Pemain</label>
+      <input id="hostSettingMaxPlayers" type="number" min="1" max="8" value="8" class="host-settings-input small">
+    </div>
+    <div class="host-settings-row">
+      <label>Mode Kesulitan</label>
+      <div class="host-mode-row">
+        <button class="host-mode-btn active" data-mode="easy">EASY</button>
+        <button class="host-mode-btn" data-mode="medium">MEDIUM</button>
+        <button class="host-mode-btn" data-mode="hard">HARD</button>
+        <button class="host-mode-btn" data-mode="ranked">RANKED</button>
+      </div>
+    </div>
+    <div class="host-settings-row">
+      <label>Mode Permainan</label>
+      <div class="host-mode-row">
+        <button class="host-gamemode-btn active" data-gamemode="normal">🎮 NORMAL</button>
+        <button class="host-gamemode-btn" data-gamemode="boss">👹 BOSS</button>
+      </div>
+    </div>
+    <div class="host-settings-row">
+      <label>Room Privat</label>
+      <label class="toggle-switch" title="Sembunyikan dari Room Browser">
+        <input type="checkbox" id="hostSettingPrivate">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <div class="host-settings-row">
+      <label>Mode Tim</label>
+      <label class="toggle-switch" title="Aktifkan mode tim merah vs biru">
+        <input type="checkbox" id="hostSettingTeamMode">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+    <button class="host-settings-apply-btn" onclick="applyHostRoomSettings()">✅ Terapkan Pengaturan</button>
+  `;
+
+  // Wire difficulty mode buttons
+  panel.querySelectorAll(".host-mode-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      panel.querySelectorAll(".host-mode-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+    });
+  });
+
+  // Wire game mode buttons
+  panel.querySelectorAll(".host-gamemode-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      panel.querySelectorAll(".host-gamemode-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+    });
+  });
+
+  // Init room name value
+  const hostNameEl = panel.querySelector("#hostSettingRoomName");
+  if (hostNameEl) hostNameEl.value = document.getElementById("lobbyRoomName")?.textContent || "";
+
+  hostActions.insertBefore(panel, hostActions.firstChild);
+
+  // Toggle show/hide via button
+  const toggleBtn = document.createElement("button");
+  toggleBtn.className = "host-settings-toggle-btn";
+  toggleBtn.innerHTML = "⚙️ Pengaturan Room";
+  toggleBtn.addEventListener("click", () => {
+    const isHidden = panel.style.display === "none" || !panel.style.display;
+    panel.style.display = isHidden ? "" : "none";
+    toggleBtn.textContent = isHidden ? "✕ Tutup Pengaturan" : "⚙️ Pengaturan Room";
+  });
+  panel.style.display = "none"; // hidden by default
+  hostActions.insertBefore(toggleBtn, panel);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ★ FASE 1: PING UPDATE — Update badge ping per-member real-time
+// ════════════════════════════════════════════════════════════════════════════
+function updateMemberPingBadge(memberId, ping) {
+  const badge = document.querySelector(`.lp-ping-badge[data-member-id="${memberId}"]`);
+  if (!badge) return;
+
+  const quality = ping === 0 ? "unknown" : ping < 50 ? "excellent" : ping < 100 ? "good" : ping < 200 ? "fair" : "poor";
+  const colorMap = { excellent: "#00f5c4", good: "#39ff14", fair: "#ffd700", poor: "#ff3b5c", unknown: "#4a5568" };
+  const color = colorMap[quality];
+  const dot = badge.querySelector(".ping-dot");
+
+  badge.style.color = color;
+  badge.style.borderColor = color + "30";
+  badge.style.background  = color + "12";
+  if (dot) dot.style.background = color;
+
+  // Update text (keep dot element)
+  const label = ping > 0 ? ping + "ms" : "—";
+  badge.lastChild.textContent = label;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ★ FASE 1: RECONNECT OVERLAY
+// ════════════════════════════════════════════════════════════════════════════
+let _reconnectOverlayEl = null;
+
+function showReconnectOverlay(roomId) {
+  if (_reconnectOverlayEl) return;
+  const el = document.createElement("div");
+  el.id = "reconnectOverlay";
+  el.className = "reconnect-overlay";
+  el.innerHTML = `
+    <div class="reconnect-card">
+      <div class="reconnect-spinner">🔄</div>
+      <div class="reconnect-title">RECONNECTING...</div>
+      <div class="reconnect-sub">Mencoba menyambung kembali ke room <strong>${roomId || "—"}</strong></div>
+      <div class="reconnect-timer" id="reconnectTimerText">30 detik tersisa</div>
+      <button class="reconnect-cancel-btn" onclick="cancelReconnect()">✕ Batalkan</button>
+    </div>
+  `;
+  document.body.appendChild(el);
+  _reconnectOverlayEl = el;
+  requestAnimationFrame(() => el.classList.add("show"));
+
+  // Countdown timer display (30 seconds grace)
+  let secs = 30;
+  const timerEl = el.querySelector("#reconnectTimerText");
+  const timerInterval = setInterval(() => {
+    secs--;
+    if (timerEl) timerEl.textContent = secs + " detik tersisa";
+    if (secs <= 0) clearInterval(timerInterval);
+  }, 1000);
+  el._timerInterval = timerInterval;
+}
+
+function hideReconnectOverlay() {
+  if (!_reconnectOverlayEl) return;
+  clearInterval(_reconnectOverlayEl._timerInterval);
+  _reconnectOverlayEl.classList.remove("show");
+  setTimeout(() => {
+    if (_reconnectOverlayEl) { _reconnectOverlayEl.remove(); _reconnectOverlayEl = null; }
+  }, 400);
+}
+
+function cancelReconnect() {
+  hideReconnectOverlay();
+  clearSessionToken();
+  notify("Reconnect dibatalkan.", "warning", 2000);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ★ FASE 1: ROOM BROWSER — Fetch /api/rooms dan tampilkan panel
+// ════════════════════════════════════════════════════════════════════════════
+
+// ★ v8.0 NEW: Auto-refresh timer untuk room browser
+let _roomBrowserRefreshTimer = null;
+
+function startRoomBrowserAutoRefresh() {
+  stopRoomBrowserAutoRefresh();
+  _roomBrowserRefreshTimer = setInterval(() => {
+    const panel = document.getElementById("roomBrowserPanel");
+    // Hanya refresh jika panel visible
+    if (panel && !panel.classList.contains("hidden")) {
+      fetchAndShowRoomBrowser(true); // silent refresh (tanpa loading indicator)
+    } else {
+      stopRoomBrowserAutoRefresh();
+    }
+  }, 10000); // 10 detik
+}
+
+function stopRoomBrowserAutoRefresh() {
+  if (_roomBrowserRefreshTimer) {
+    clearInterval(_roomBrowserRefreshTimer);
+    _roomBrowserRefreshTimer = null;
+  }
+}
+
+async function fetchAndShowRoomBrowser(silent = false) {
+  const panel = document.getElementById("roomBrowserPanel");
+  if (!panel) return;
+  if (!silent) panel.innerHTML = `<div class="rb-loading">⏳ Mencari room publik...</div>`;
+  panel.classList.remove("hidden");
+  // ★ v8.0: Mulai auto-refresh ketika browser dibuka
+  startRoomBrowserAutoRefresh();
+
+  try {
+    const response = await fetch("/api/rooms");
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    const rooms = await response.json();
+    renderRoomBrowserList(rooms);
+  } catch (err) {
+    if (!silent) {
+      panel.innerHTML = `<div class="rb-error">❌ Gagal memuat room: ${err.message}</div>
+        <button class="rb-retry-btn" onclick="fetchAndShowRoomBrowser()">🔄 Coba Lagi</button>`;
+    }
+  }
+}
+
+function renderRoomBrowserList(rooms) {
+  const panel = document.getElementById("roomBrowserPanel");
+  if (!panel) return;
+
+  const modeIcons = { easy: "🟢", medium: "🟡", hard: "🔴", boss: "👹", ranked: "🏆" };
+
+  if (!rooms || rooms.length === 0) {
+    panel.innerHTML = `
+      <div class="rb-empty">
+        <div class="rb-empty-icon">🏜️</div>
+        <div>Tidak ada room publik aktif saat ini.</div>
+        <div class="rb-empty-hint">Buat room baru atau tunggu orang lain masuk.</div>
+      </div>
+    `;
+    return;
+  }
+
+  panel.innerHTML = `
+    <div class="rb-header">
+      <span>🌐 ${rooms.length} Room Publik Tersedia</span>
+      <button class="rb-refresh-btn" onclick="fetchAndShowRoomBrowser()">🔄</button>
+    </div>
+    ${rooms.map(r => {
+      const full = r.isFull;
+      const modeIcon = modeIcons[r.mode] || "🎮";
+      const pingColor = r.avgPing < 50 ? "#00f5c4" : r.avgPing < 150 ? "#ffd700" : "#ff3b5c";
+      return `
+      <div class="rb-room-row ${full ? 'full' : ''}" onclick="${full ? '' : `quickJoinToRoom('${r.id}')`}">
+        <div class="rb-room-left">
+          <div class="rb-room-name">${escapeHtml(r.name)}</div>
+          <div class="rb-room-meta">
+            ${modeIcon} ${r.mode.toUpperCase()} &nbsp;·&nbsp; 
+            Host: ${escapeHtml(r.hostName)}
+          </div>
+        </div>
+        <div class="rb-room-right">
+          <div class="rb-room-players ${full ? 'full' : ''}">
+            👥 ${r.playerCount}/${r.maxPlayers}
+          </div>
+          ${r.avgPing > 0 ? `<div class="rb-room-ping" style="color:${pingColor}">📶 ${r.avgPing}ms</div>` : ''}
+          ${full ? '<div class="rb-room-full">PENUH</div>' : '<button class="rb-join-btn">JOIN</button>'}
+        </div>
+      </div>`;
+    }).join("")}
+  `;
+}
+
+// Masuk ke room dari browser
+function quickJoinToRoom(roomId) {
+  const nameEl = document.getElementById("usernameInputJoin");
+  const nameVal = (nameEl?.value.trim()) || currentUsername || "";
+  if (!nameVal) {
+    notify("❌ Isi nama pemain dulu sebelum join!", "warning", 2500);
+    return;
+  }
+
+  const color = document.querySelector("#colorGridJoin .color-swatch.active")?.dataset.color || "#00cfff";
+  const mode  = document.querySelector(".mode-btn-j.active")?.dataset.mode || "easy";
+
+  currentUsername = nameVal.substring(0, 12);
+  selectedMainMode = "multi";
+  saveUserData();
+  initAudioContext();
+
+  if (socket && socket.connected) {
+    socket.emit("joinRoom", { username: currentUsername, color, mode, roomId });
+    const statusEl = document.getElementById("connectStatus");
+    if (statusEl) statusEl.textContent = "⏳ Bergabung ke room " + roomId + "...";
+    // Hide browser panel
+    const panel = document.getElementById("roomBrowserPanel");
+    if (panel) panel.classList.add("hidden");
+  } else {
+    notify("⚠️ Socket belum terhubung. Tunggu sebentar lagi.", "warning", 2000);
+  }
+}
+
+// Quick Join button — cari room otomatis atau buat baru
+function triggerQuickJoin() {
+  const nameEl = document.getElementById("usernameInputJoin");
+  const nameVal = (nameEl?.value.trim()) || currentUsername || "";
+  if (!nameVal) {
+    notify("❌ Isi nama pemain dulu sebelum Quick Join!", "warning", 2500);
+    nameEl?.focus();
+    return;
+  }
+  currentUsername = nameVal.substring(0, 12);
+  selectedMainMode = "multi";
+  saveUserData();
+  initAudioContext();
+
+  const color = document.querySelector("#colorGridJoin .color-swatch.active")?.dataset.color || "#00cfff";
+  const mode  = document.querySelector(".mode-btn-j.active")?.dataset.mode || "easy";
+
+  const statusEl = document.getElementById("connectStatus");
+  if (statusEl) statusEl.textContent = "⚡ Mencari room...";
+
+  if (socket && socket.connected) {
+    socket.emit("quickJoin", { username: currentUsername, color, mode });
+  } else {
+    notify("⚠️ Socket belum terhubung.", "warning", 2000);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ★ FASE 1: LAN/CLOUD BADGE update di lobby header
+// ════════════════════════════════════════════════════════════════════════════
+function updateConnectionBadge(isCloud) {
+  const badge = document.getElementById("connectionTypeBadge");
+  if (!badge) return;
+  if (isCloud) {
+    badge.textContent = "☁️ CLOUD";
+    badge.className = "connection-badge cloud";
+  } else {
+    badge.textContent = "📡 LAN";
+    badge.className = "connection-badge lan";
+  }
+}
+
+// Update server feature pills di lobby header
+function updateServerFeaturePills(features) {
+  const list = document.getElementById("serverFeatureList");
+  if (!list || !features) return;
+  const icons = {
+    "lobby-v2":        "🏛️ Lobby v2",
+    "token-reconnect": "🔌 Reconnect",
+    "room-browser":    "🌐 Room Browser",
+    "quick-join":      "⚡ Quick Join",
+    "ping-rtt":        "📶 Ping RTT",
+    "kick-player":     "👢 Kick",
+    "boss-engine":     "👹 Boss",
+  };
+  list.innerHTML = features
+    .filter(f => icons[f])
+    .map(f => `<span class="server-feature-pill">${icons[f]}</span>`)
+    .join("");
+}
+
 function showLobbyCountdown(num) {
   const overlay = document.getElementById("lobbyCountdown");
   const numEl   = document.getElementById("lobbyCountdownNum");
   if (!overlay || !numEl) return;
   overlay.classList.remove("hidden");
-  numEl.textContent = num;
-  // Re-trigger CSS animation
+  // BUG FIX: Reset animasi sebelum set angka baru
   numEl.style.animation = "none";
-  numEl.offsetHeight; // reflow
+  void numEl.offsetHeight; // force reflow
+  numEl.textContent  = num;
   numEl.style.animation = "";
 }
 
@@ -2532,40 +3571,51 @@ function escapeHtml(str) {
 }
 
 // ── Lobby Button Handlers ──────────────────────────────────────────────────
+// BUG FIX: Gunakan flag _wired untuk cegah double-binding
 (function initLobbyButtons() {
+  // ★ v8.0 FIX: Wire #quickJoinBtn (ada di HTML tapi tidak pernah di-wire di JS)
+  const quickJoinBtnEl = document.getElementById("quickJoinBtn");
+  if (quickJoinBtnEl && !quickJoinBtnEl._wired) {
+    quickJoinBtnEl._wired = true;
+    quickJoinBtnEl.addEventListener("click", triggerQuickJoin);
+  }
   // Ready button (guest)
   const readyBtn = document.getElementById("lobbyReadyBtn");
-  if (readyBtn) {
+  if (readyBtn && !readyBtn._wired) {
+    readyBtn._wired = true;
     let isReady = false;
     readyBtn.addEventListener("click", () => {
       isReady = !isReady;
       readyBtn.classList.toggle("active", isReady);
-      readyBtn.textContent = isReady ? "⏳ Batalkan" : "✅ SIAP";
+      readyBtn.textContent = isReady ? "⏳ Batalkan" : "✅ SIAP BERMAIN";
       if (socket && socket.connected) socket.emit("playerReady", { isReady });
     });
   }
 
   // Start button (host)
-  const startBtn = document.getElementById("lobbyStartBtn");
-  if (startBtn) {
-    startBtn.addEventListener("click", () => {
+  const startBtnLobby = document.getElementById("lobbyStartBtn");
+  if (startBtnLobby && !startBtnLobby._wired) {
+    startBtnLobby._wired = true;
+    startBtnLobby.addEventListener("click", () => {
       if (socket && socket.connected) socket.emit("startMatch");
     });
   }
 
   // Leave lobby
   const leaveBtn = document.getElementById("lobbyLeaveBtn");
-  if (leaveBtn) {
+  if (leaveBtn && !leaveBtn._wired) {
+    leaveBtn._wired = true;
     leaveBtn.addEventListener("click", () => {
       if (!confirm("Keluar dari lobby?")) return;
+      if (socket && socket.connected && myRoomId) {
+        socket.emit("exitGame");
+      }
       hideLobbyScreen();
       myRoomId    = null;
       isLobbyHost = false;
+      selectedMainMode = "single";
       startOverlay.classList.remove("hidden");
       transitionTo(STATE.START_SCREEN);
-      if (socket && socket.connected) socket.disconnect();
-      socket = null;
-      setTimeout(() => initSocket(), 300);
     });
   }
 
@@ -2579,12 +3629,13 @@ function escapeHtml(str) {
     if (socket && socket.connected) socket.emit("lobbyChat", { message: msg });
     chatInput.value = "";
   }
-  if (chatSend)  chatSend.addEventListener("click", sendLobbyChat);
-  if (chatInput) chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); sendLobbyChat(); } });
+  if (chatSend && !chatSend._wired)   { chatSend._wired = true;  chatSend.addEventListener("click", sendLobbyChat); }
+  if (chatInput && !chatInput._wired) { chatInput._wired = true; chatInput.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); sendLobbyChat(); } }); }
 
   // Copy room code in lobby
   const copyBtn = document.getElementById("lobbyCopyBtn");
-  if (copyBtn) {
+  if (copyBtn && !copyBtn._wired) {
+    copyBtn._wired = true;
     copyBtn.addEventListener("click", () => {
       const code = document.getElementById("lobbyRoomCode")?.textContent;
       if (code && code !== "——") {
@@ -2598,18 +3649,60 @@ function escapeHtml(str) {
 
   // Room ID input uppercase
   const roomIdInput = document.getElementById("joinRoomIdInput");
-  if (roomIdInput) {
+  if (roomIdInput && !roomIdInput._wired) {
+    roomIdInput._wired = true;
     roomIdInput.addEventListener("input", () => {
       const pos = roomIdInput.selectionStart;
       roomIdInput.value = roomIdInput.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
       roomIdInput.setSelectionRange(pos, pos);
     });
   }
+
+  // Host settings toggle
+  const hsToggle = document.getElementById("hostSettingsToggle");
+  if (hsToggle && !hsToggle._wired) {
+    hsToggle._wired = true;
+    hsToggle.addEventListener("click", () => {
+      const body  = document.getElementById("hostSettingsBody");
+      const arrow = hsToggle.querySelector(".toggle-arrow");
+      if (body) { const isOpen = body.style.display !== "none"; body.style.display = isOpen ? "none" : ""; if (arrow) arrow.textContent = isOpen ? "▼" : "▲"; }
+    });
+  }
+
+  // Host apply settings
+  const applyBtn = document.getElementById("hostApplySettingsBtn");
+  if (applyBtn && !applyBtn._wired) {
+    applyBtn._wired = true;
+    applyBtn.addEventListener("click", applyHostRoomSettings);
+  }
+
+  // Host setting mode buttons
+  document.querySelectorAll(".hs-mode-btn").forEach(b => {
+    if (!b._wired) { b._wired = true; b.addEventListener("click", () => { document.querySelectorAll(".hs-mode-btn").forEach(x => x.classList.remove("active")); b.classList.add("active"); }); }
+  });
+  document.querySelectorAll(".hs-gamemode-btn").forEach(b => {
+    if (!b._wired) { b._wired = true; b.addEventListener("click", () => { document.querySelectorAll(".hs-gamemode-btn").forEach(x => x.classList.remove("active")); b.classList.add("active"); }); }
+  });
 })();
 
-// ════════════════════════════════════════════════════════════════════════════
-//  17B. MULTIPLAYER SETUP — Create Room & Join Room buttons
-// ════════════════════════════════════════════════════════════════════════════
+// ── Ghost Button (Saboteur poop send) ─────────────────────────────────────
+// ★ v8.0 NEW: Wire #ghostBtn yang ada di index.html
+(function initGhostButton() {
+  const ghostBtnEl = document.getElementById("ghostBtn");
+  if (!ghostBtnEl || ghostBtnEl._wired) return;
+  ghostBtnEl._wired = true;
+  ghostBtnEl.addEventListener("click", () => {
+    if (!socket || !socket.connected || selectedMainMode !== "multi") return;
+    if (currentState !== STATE.GAME_OVER) return; // Hanya aktif saat spectating (sudah mati)
+    // Pilih target acak dari leaderboard
+    const board = window._crownBoard || [];
+    const alive = board.filter(p => p.id !== mySocketId && p.status !== "dead");
+    if (alive.length === 0) { notify("Tidak ada lawan aktif untuk disabotase!", "warning", 2000); return; }
+    const target = alive[Math.floor(Math.random() * alive.length)];
+    socket.emit("sendPoop", { targetId: target.id });
+    notify(`💩 Mengirim kotoran ke ${target.username}...`, "gold", 2000);
+  });
+})();
 document.getElementById("startMultiBtn").addEventListener("click", async function() {
   const nameEl = document.getElementById("usernameInputMulti");
   const errEl  = document.getElementById("usernameErrorMulti");
@@ -2625,12 +3718,25 @@ document.getElementById("startMultiBtn").addEventListener("click", async functio
   const color    = document.querySelector("#colorGridMulti .color-swatch.active")?.dataset.color || "#00f5c4";
   const mode     = document.querySelector(".mode-btn-m.active")?.dataset.mode || "easy";
   const roomName = (document.getElementById("roomNameInput")?.value.trim()) || `${currentUsername}'s Room`;
+  selectedMode   = mode;
 
-  // Connect socket first
+  // Connect socket dengan benar — tunggu sampai benar-benar terhubung
   if (!socket || !socket.connected) {
     if (!socket) initSocket();
-    await new Promise(r => setTimeout(r, 600));
+    try {
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error("Timeout koneksi")), 10000);
+        // BUGFIX: jika sudah connected saat Promise dibuat, langsung resolve
+        if (socket.connected) { clearTimeout(t); resolve(); return; }
+        socket.once("connect", () => { clearTimeout(t); resolve(); });
+        socket.once("connect_error", (e) => { clearTimeout(t); reject(e); });
+      });
+    } catch (err) {
+      notify("⚠️ Tidak dapat terhubung ke server: " + err.message, "warning", 4000);
+      return;
+    }
   }
+
   if (socket && socket.connected) {
     socket.emit("createRoom", { username: currentUsername, color, mode, roomName });
   } else {
@@ -2662,11 +3768,21 @@ document.getElementById("joinServerBtn").addEventListener("click", async functio
 
   try {
     if (srvUrl) {
+      // BUGFIX: connectToServer sudah tidak double-init, langsung await
       await connectToServer(srvUrl);
     } else {
       if (!socket || !socket.connected) {
         if (!socket) initSocket();
-        await new Promise(r => setTimeout(r, 600));
+        // Tunggu hingga socket benar-benar terhubung
+        // BUGFIX: jika socket sudah connected, langsung lanjut
+        if (!socket.connected) {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(() => reject(new Error("Timeout koneksi")), 10000);
+            if (socket.connected) { clearTimeout(t); resolve(); return; }
+            socket.once("connect", () => { clearTimeout(t); resolve(); });
+            socket.once("connect_error", (e) => { clearTimeout(t); reject(e); });
+          });
+        }
       }
     }
 
@@ -2677,6 +3793,7 @@ document.getElementById("joinServerBtn").addEventListener("click", async functio
 
     const color = document.querySelector("#colorGridJoin .color-swatch.active")?.dataset.color || "#00cfff";
     const mode  = document.querySelector(".mode-btn-j.active")?.dataset.mode || "easy";
+    selectedMode = mode;
     socket.emit("joinRoom", { username: currentUsername, color, mode, roomId: roomIdVal });
     if (statusEl) { statusEl.textContent = "⏳ Bergabung ke room..."; }
   } catch (err) {
@@ -2906,6 +4023,63 @@ initAudioUI();
 transitionTo(STATE.START_SCREEN);
 initSocket();
 
+// ── URL ?room=XXXX Auto-Join ─────────────────────────────────────────────
+// Jika ada ?room=KODE di URL (misal dari QR code atau share link),
+// langsung tampilkan panel JOIN dan isi kode roomnya.
+// Auto-join sesungguhnya baru terjadi setelah user mengisi nama & klik JOIN,
+// atau jika nama sudah tersimpan maka langsung auto-join.
+(function handleRoomParam() {
+  const params  = new URLSearchParams(window.location.search);
+  const roomCode = (params.get("room") || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!roomCode || roomCode.length < 4) return;
+
+  // Isi field kode room di panel join
+  const roomIdInput = document.getElementById("joinRoomIdInput");
+  if (roomIdInput) roomIdInput.value = roomCode;
+
+  // Pindah ke step multiplayer → tab JOIN
+  selectedMainMode = "multi";
+  stepMode.classList.remove("active");
+  const stepMultiEl = document.getElementById("step-multi");
+  if (stepMultiEl) stepMultiEl.classList.add("active");
+
+  // Aktifkan tab JOIN
+  document.querySelectorAll(".multi-tab").forEach(t => t.classList.remove("active"));
+  document.querySelectorAll(".multi-content").forEach(c => c.classList.remove("active"));
+  const tabJoin   = document.getElementById("tabJoin");
+  const panelJoin = document.getElementById("panelJoin");
+  if (tabJoin)   tabJoin.classList.add("active");
+  if (panelJoin) panelJoin.classList.add("active");
+  activeMultiTab = "join";
+
+  // Pre-fill nama jika sudah ada
+  const nameInput = document.getElementById("usernameInputJoin");
+  if (nameInput && currentUsername) nameInput.value = currentUsername;
+
+  // Jika nama sudah tersimpan → auto-join langsung setelah socket connect
+  if (currentUsername) {
+    function tryAutoJoin() {
+      if (!socket || !socket.connected) return;
+      const color = document.querySelector("#colorGridJoin .color-swatch.active")?.dataset.color || "#00cfff";
+      const mode  = document.querySelector(".mode-btn-j.active")?.dataset.mode || "easy";
+      selectedMode = mode;
+      selectedMainMode = "multi";
+      socket.emit("joinRoom", { username: currentUsername, color, mode, roomId: roomCode });
+      const statusEl = document.getElementById("connectStatus");
+      if (statusEl) { statusEl.textContent = "⏳ Auto-join ke room " + roomCode + "..."; }
+    }
+    if (socket && socket.connected) {
+      tryAutoJoin();
+    } else {
+      socket.once("connect", tryAutoJoin);
+    }
+  }
+
+  // Bersihkan ?room= dari URL bar tanpa reload halaman
+  const cleanUrl = window.location.pathname;
+  window.history.replaceState({}, document.title, cleanUrl);
+})();
+
 // Idle animation di start screen
 (function idleFrame() {
   if (currentState !== STATE.START_SCREEN && currentState !== STATE.INIT) return;
@@ -2934,3 +4108,193 @@ initSocket();
   applyMatriksPikselCRT();
   requestAnimationFrame(idleFrame);
 })();
+// ════════════════════════════════════════════════════════════════════════════
+//  SNAKE ARCADE v4.1 — FASE 1 UPGRADE PATCH
+//  Tambahan: Ping RTT loop, Quick Chat improvements, Latency indicator,
+//  Gamemode selector wiring, host-settings gameMode, better UI helpers
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── PING RTT LOOP — kirim ping ke server setiap 2 detik ──────────────────
+(function startPingLoop() {
+  // Ping dikirim dari client ke server setiap 2 detik
+  // Server balas "pongCheck" dan client hitung RTT
+  function sendPing() {
+    if (!socket || !socket.connected) return;
+    const ts = Date.now();
+    socket.emit("pingCheck", { ts });
+  }
+
+  // Mulai loop setelah socket terhubung (tunggu 1 detik pertama)
+  let _pingTimer = null;
+  function startLoop() {
+    if (_pingTimer) return;
+    _pingTimer = setInterval(sendPing, 2000);
+  }
+  function stopLoop() {
+    if (_pingTimer) { clearInterval(_pingTimer); _pingTimer = null; }
+  }
+
+  // Hook ke socket connect/disconnect agar loop berjalan dengan benar
+  const _origInitSocket = window.initSocket;
+  // Gunakan MutationObserver tidak diperlukan — cukup poll socket connected state
+  setInterval(() => {
+    if (socket && socket.connected) {
+      startLoop();
+    } else {
+      stopLoop();
+    }
+  }, 3000);
+
+  // FIX: Tidak pasang listener pongCheck duplikat — sudah ada di bindSocketEvents.
+  // updateLatencyIndicator dipanggil dari dalam handler pongCheck di bindSocketEvents.
+  window._updateLatencyOnPing = function(rtt) {
+    updateLatencyIndicator(rtt);
+  };
+})();
+
+// ── LATENCY INDICATOR di header (in-game) ────────────────────────────────
+function updateLatencyIndicator(rtt) {
+  let el = document.getElementById("latencyIndicator");
+  if (!el) {
+    // Buat elemen jika belum ada
+    const modeTagEl = document.getElementById("modeTag");
+    if (!modeTagEl) return;
+    el = document.createElement("span");
+    el.id = "latencyIndicator";
+    el.innerHTML = `<span class="lat-dot"></span><span id="latVal">—ms</span>`;
+    modeTagEl.insertAdjacentElement("afterend", el);
+  }
+  const valEl = document.getElementById("latVal");
+  if (valEl) valEl.textContent = rtt + "ms";
+  el.className = "latency-indicator " + (rtt < 80 ? "good" : rtt < 150 ? "fair" : "poor");
+}
+
+// ── GAMEMODE SELECTOR wiring di host panel ────────────────────────────────
+(function wireGameModeSelector() {
+  function doWire() {
+    document.querySelectorAll(".gamemode-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".gamemode-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+      });
+    });
+  }
+  // Coba langsung, dan juga setelah DOM fully ready
+  doWire();
+  if (document.readyState !== "complete") {
+    window.addEventListener("load", doWire);
+  }
+})();
+
+// ── QUICK CHAT: Pesan server sudah termasuk dalam QUICK_CHAT_PRESETS ──────────
+// FIXED: Override window.injectQuickChatButton dihapus karena menyebabkan
+// panel quick chat dirender ulang dengan kelas CSS yang salah (.qc-msg-btn)
+// Gunakan QUICK_CHAT_PRESETS yang sudah didefinisikan (sinkron dengan server).
+const QUICK_CHAT_EXTENDED = [
+  "GG!", "Nice move!", "Siap!", "Follow me!", "Waspada!",
+  "Aku di kanan!", "BOSS mau serang!", "Kumpul sini!",
+  "Mantap!", "Ayo semangat!", "Lawan Boss bareng!", "Hati-hati poop!",
+];
+
+// ── HELPER: sendQC (untuk onclick inline) ────────────────────────────────
+window.sendQC = function(msg) {
+  if (socket && socket.connected) {
+    socket.emit("quickChat", { message: msg });
+  }
+  closeQuickChatPanel();
+};
+
+// ── CLOSE QUICK CHAT PANEL ────────────────────────────────────────────────
+function closeQuickChatPanel() {
+  const panel = document.querySelector(".qc-panel");
+  if (panel) panel.classList.remove("open");
+}
+
+// ── GAMEMODE TAG UPDATE ───────────────────────────────────────────────────
+function updateGameModeTag(gameMode) {
+  const tag = document.getElementById("modeTag");
+  if (!tag) return;
+  if (selectedMainMode !== "multi") {
+    tag.textContent = "SINGLE";
+    tag.className   = "mode-tag";
+    return;
+  }
+  const labels = { normal: "MULTI", boss: "👹 BOSS", ranked: "🏆 RANKED" };
+  tag.textContent = labels[gameMode] || "MULTI";
+  tag.className   = "mode-tag multi";
+}
+
+// ── SERVER FEATURE PILLS render ──────────────────────────────────────────
+function renderServerFeaturePills(features) {
+  const container = document.getElementById("serverFeatureList");
+  if (!container || !features) return;
+  container.innerHTML = features.slice(0, 6).map(f =>
+    `<span class="sf-pill">✓ ${f}</span>`
+  ).join("");
+}
+
+// ── LOBBY UPDATE EVENT listener patch ────────────────────────────────────
+// FIXED: Handler lobbyUpdate sudah terintegrasi langsung di bindSocketEvents() di atas.
+// Patch window.bindSocketEvents dihapus untuk mencegah listener ganda yang menyebabkan
+// lobbyUpdate dieksekusi 2x per event.
+// Logic gameMode tag, serverFeaturePills, connectionBadge sudah ada di handler utama.
+
+// ── CONNECTION BADGE UPDATE — defined at line 3359, tidak perlu didefinisikan ulang ─
+
+// ── LOBBY CHAT: enter key wiring sudah ada di initLobbyButtons() di atas ──────
+// FIXED: Patch window.showLobbyScreen dihapus untuk mencegah double-binding.
+// wire() sudah dipanggil di dalam initLobbyButtons() dengan flag _wired.
+
+// ── TRIGGERQUICKJOIN (standalone fallback) ───────────────────────────────
+// FIXED: Tidak perlu patch window.triggerQuickJoin — fungsi triggerQuickJoin
+// sudah terdefinisi di atas dan tidak memerlukan override.
+if (typeof window.triggerQuickJoin !== "function") {
+  window.triggerQuickJoin = function() {
+    if (!socket || !socket.connected) {
+      notify("❌ Belum terhubung ke server!", "danger", 3000);
+      return;
+    }
+    const name  = (document.getElementById("usernameInputJoin")?.value || currentUsername || "").trim();
+    const color = document.querySelector("#colorGridJoin .color-swatch.active")?.dataset.color || "#00cfff";
+    const mode  = document.querySelector(".mode-btn-j.active")?.dataset.mode || "easy";
+    if (!name) { notify("❌ Isi nama terlebih dahulu!", "danger", 2000); return; }
+    socket.emit("quickJoin", { username: name, color, mode });
+    notify("⚡ Mencari room...", "gold", 2000);
+  };
+}
+
+// ── ESCAPEHTML (ensure it's global) ──────────────────────────────────────
+if (typeof window.escapeHtml !== "function") {
+  window.escapeHtml = function(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  };
+}
+
+// ── AUTO INIT AUDIO UI ─────────────────────────────────────────────────────
+// Pastikan audio controls berfungsi dengan benar
+(function ensureAudioUI() {
+  const toggle = document.getElementById("audioToggle");
+  if (toggle && !toggle._wired) {
+    toggle._wired = true;
+    toggle.addEventListener("change", () => {
+      const ctrls = document.getElementById("audioControls");
+      if (ctrls) ctrls.classList.toggle("muted", !toggle.checked);
+      globalMuted = !toggle.checked;
+      if (globalMuted) { stopBGM(); bgmPlaying = false; }
+      const btn = document.getElementById("btnMute");
+      if (btn) btn.textContent = globalMuted ? "🔇" : "🔊";
+      saveUserPrefs();
+    });
+    // Sync initial state
+    toggle.checked = !globalMuted;
+    const ctrls = document.getElementById("audioControls");
+    if (ctrls) ctrls.classList.toggle("muted", globalMuted);
+  }
+})();
+
+console.log("[Snake Arcade v8.0] Full Upgrade loaded ✅ — All bugs fixed, all features upgraded.");

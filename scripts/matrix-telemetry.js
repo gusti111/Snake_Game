@@ -1,5 +1,5 @@
 // ============================================================================
-// scripts/matrix-telemetry.js — v5.0 Engineering Edition
+// scripts/matrix-telemetry.js — v5.1 Engineering Edition — Fase 1 Compliant
 // Alat Stress-Test Komparatif: Profiling Render Loop & Telemetri Latensi Jaringan
 // Jalankan langsung pada Browser DevTools Console saat sesi game aktif
 // ============================================================================
@@ -92,7 +92,7 @@
     if (window.socket && window.socket.on && !originalSocketOn) {
       originalSocketOn = window.socket.on.bind(window.socket);
       window.socket.on = function(event, callback) {
-        if (event === "gameStateSync") {
+        if (event === "leaderboard") {
           return originalSocketOn(event, function(data) {
             const now = performance.now();
             if (lastPacketTimestamp > 0) {
@@ -188,7 +188,7 @@
   };
 
   console.log(
-    "%c[Telemetry] Matrix Telemetry v5.0 (Server-Authoritative Compliant) Engine Loaded.\n" +
+    "%c[Telemetry] Matrix Telemetry v5.1 (Server-Authoritative Compliant) Engine Loaded.\n" +
     "  Execute: %cMatrixTelemetry.start()%c -> Mengaktifkan pemantauan real-time.\n" +
     "  Execute: %cMatrixTelemetry.stop()%c  -> Menonaktifkan telemetri.",
     "color: #00f5c4; font-weight: bold;",
