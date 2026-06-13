@@ -79,6 +79,12 @@ const CHAT_COOLDOWN_MS   = 2_000;
 const PING_INTERVAL_MS   = 5_000;
 const MAX_SPECTATORS     = 10;
 
+// ── Game Mode Whitelist (Fase 1: Boss Mode dihapus) ────────────────────────
+const GAME_MODES = [
+  "normal",
+  "ranked"
+];
+
 // ── Seasonal Event ────────────────────────────────────────────────────────
 function getCurrentSeasonalEvent() {
   const now = new Date();
@@ -87,11 +93,10 @@ function getCurrentSeasonalEvent() {
   if (m === 3 || m === 4) return { id: "ramadan",     name: "🌙 Bulan Ramadan", multiplier: 1.5, color: "#ffd700" };
   if (m === 12)            return { id: "christmas",   name: "🎄 Natal & Tahun Baru", multiplier: 1.3, color: "#00f5c4" };
   if (m === 8 && d >= 17 && d <= 25) return { id: "independence", name: "🇮🇩 HUT RI", multiplier: 1.7, color: "#ff3b5c" };
-  const week   = Math.floor((now.getTime() / (7 * 24 * 3600000))) % 4;
+  const week   = Math.floor((now.getTime() / (7 * 24 * 3600000))) % 3;
   const weekly = [
     { id: "speed_week",  name: "⚡ Speed Week",  multiplier: 1.2, color: "#ff8c00" },
     { id: "combo_week",  name: "🔥 Combo Week",  multiplier: 1.2, color: "#b066ff" },
-    { id: "boss_week",   name: "👹 Boss Week",   multiplier: 1.4, color: "#ff3b5c" },
     { id: "golden_week", name: "✨ Golden Week", multiplier: 1.3, color: "#ffd700" },
   ];
   return weekly[week];
@@ -99,8 +104,8 @@ function getCurrentSeasonalEvent() {
 
 const QUICK_CHAT_MESSAGES = [
   "GG!", "Nice move!", "Siap!", "Follow me!", "Waspada!", "Aku di kanan!",
-  "BOSS mau serang!", "Kumpul sini!", "Mantap!", "Ayo semangat!",
-  "Lawan Boss bareng!", "Hati-hati poop!",
+  "Kumpul sini!", "Mantap!", "Ayo semangat!",
+  "Hati-hati poop!",
 ];
 
 // LAN IPs — Filter interface virtual, hanya tampilkan jaringan fisik yang berguna
@@ -243,7 +248,7 @@ app.get("/api/server-info", (_, res) => {
     features: [
       "lobby-v2", "token-reconnect", "room-browser", "quick-join",
       "ping-rtt", "kick-player", "host-migration", "ghost-timer",
-      "boss-engine", "ranked-elo", "quick-chat", "lobby-chat",
+      "ranked-elo", "quick-chat", "lobby-chat",
       "match-summary", "host-lock-room", "spectator-mode",
       "match-history", "seasonal-events", "team-mode", "vote-kick",
     ],
@@ -275,112 +280,6 @@ app.get("/api/player/:id", (req, res) => {
     res.json({ profile: p || null, bestScore: gs?.best_score || 0, matchHistory: mh });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// ════════════════════════════════════════════════════════════════════════════
-//  BOSS ENGINE
-// ════════════════════════════════════════════════════════════════════════════
-class BossEngine {
-  constructor(roomId) {
-    this.roomId  = roomId;
-    this.maxHp   = 15_000;
-    this.hp      = this.maxHp;
-    this.x       = 250; this.y = 250;
-    this.zones   = [];
-    this._loop   = null;
-    this.active  = false;
-    this._tick_n = 0;
-    this.lootTable = ["doublescr", "shield", "magnet", "slowmotion", "banana"];
-  }
-
-  get phase() {
-    const pct = this.hp / this.maxHp;
-    if (pct < 0.25) return 3;
-    if (pct < 0.50) return 2;
-    return 1;
-  }
-
-  start() {
-    this.active = true;
-    this.hp     = this.maxHp;
-    this._loop  = setInterval(() => this._tick(), 100);
-    console.log(`[Boss] Room ${this.roomId}: Boss Engine started`);
-  }
-
-  stop() {
-    this.active = false;
-    if (this._loop) { clearInterval(this._loop); this._loop = null; }
-  }
-
-  applyDamage(amount) {
-    if (!this.active) return;
-    const prevPhase = this.phase;
-    this.hp = Math.max(0, this.hp - amount);
-    const nowPhase = this.phase;
-    if (prevPhase !== nowPhase) {
-      const msg = nowPhase === 3 ? "💢 BOSS BERSERK!" : "😡 BOSS ENRAGED!";
-      io.to(this.roomId).emit("bossPhaseChange", { phase: nowPhase, message: msg });
-    }
-    if (this.hp <= 0) { this.stop(); this._dropLoot(); }
-  }
-
-  _dropLoot() {
-    const loot = this.lootTable[Math.floor(Math.random() * this.lootTable.length)];
-    io.to(this.roomId).emit("bossLootDrop", {
-      type: loot,
-      message: `🎁 Boss mati! Semua dapat ${loot}!`,
-    });
-  }
-
-  _tick() {
-    if (!this.active || this.hp <= 0) return;
-    const now   = Date.now();
-    const phase = this.phase;
-    this._tick_n++;
-    this.zones = this.zones.filter(z => z.expiresAt > now);
-
-    const attackChance = phase === 3 ? 0.18 : phase === 2 ? 0.12 : 0.08;
-    if (Math.random() < attackChance) {
-      const room = rooms.get(this.roomId);
-      if (room) {
-        let cx = 0, cy = 0, cnt = 0;
-        room.players.forEach(sid => {
-          const p = players.get(sid);
-          if (p?.status === "alive" && p.lastX != null) {
-            const lead = phase === 3 ? 6 : phase === 2 ? 4 : 3;
-            cx += p.lastX + (p.dx || 0) * lead;
-            cy += p.lastY + (p.dy || 0) * lead;
-            cnt++;
-          }
-        });
-        if (cnt > 0) {
-          const radius   = phase === 3 ? 80 : phase === 2 ? 70 : 60;
-          const duration = phase === 3 ? 1500 : 2000;
-          this.zones.push({
-            id:        crypto.randomBytes(4).toString("hex"),
-            x:         Math.max(0, Math.min(500, cx / cnt + (Math.random() * 60 - 30))),
-            y:         Math.max(0, Math.min(500, cy / cnt + (Math.random() * 60 - 30))),
-            radius,
-            expiresAt: now + duration,
-          });
-        }
-      }
-    }
-
-    if (this._tick_n % 20 === 0) {
-      this.x += (Math.random() - 0.5) * 40;
-      this.y += (Math.random() - 0.5) * 40;
-      this.x  = Math.max(50, Math.min(450, this.x));
-      this.y  = Math.max(50, Math.min(450, this.y));
-    }
-
-    const bossSync = {
-      hp: this.hp, maxHp: this.maxHp,
-      x: this.x, y: this.y, phase,
-      zones: this.zones.map(z => ({ x: z.x, y: z.y, radius: z.radius })),
-    };
-    io.to(this.roomId).volatile.emit("boss_sync", bossSync);
-  }
-}
 
 // ════════════════════════════════════════════════════════════════════════════
 //  RANKED ELO
@@ -534,7 +433,7 @@ function broadcastLobby(room) {
     seasonalEvent: getCurrentSeasonalEvent(),
     features: [
       "lobby-v2", "token-reconnect", "room-browser", "quick-join",
-      "ping-rtt", "kick-player", "boss-engine", "ranked-elo", "quick-chat",
+      "ping-rtt", "kick-player", "ranked-elo", "quick-chat",
       "match-summary", "spectator-mode", "team-mode", "vote-kick",
       "seasonal-events", "global-leaderboard",
     ],
@@ -569,7 +468,6 @@ function saveSessionToken(socketId, roomId) {
 function cleanupRoom(roomId) {
   const room = rooms.get(roomId);
   if (!room) return;
-  if (room.bossEngine) room.bossEngine.stop();
   rooms.delete(roomId);
   voteKickMap.delete(roomId);
   console.log(`[Room] ${roomId} dihapus (kosong/timeout)`);
@@ -692,7 +590,6 @@ io.on("connection", socket => {
       players:    [socket.id],
       spectators: [],
       state:      LOBBY_STATE.WAITING,
-      bossEngine: null,
       settings: {
         name:       (roomName || "").substring(0, 20) || `${name}'s Room`,
         maxPlayers: 8,
@@ -928,7 +825,6 @@ io.on("connection", socket => {
         players:    [socket.id],
         spectators: [],
         state:      LOBBY_STATE.WAITING,
-        bossEngine: null,
         settings: {
           name:       `${name}'s Room`,
           maxPlayers: 8,
@@ -1001,11 +897,6 @@ io.on("connection", socket => {
           const p = players.get(sid);
           if (p) p.status = "alive";
         });
-
-        if (room.settings.gameMode === "boss") {
-          room.bossEngine = new BossEngine(room.id);
-          room.bossEngine.start();
-        }
 
         const seasonalEvent = getCurrentSeasonalEvent();
         io.to(room.id).emit("matchStarted", {
@@ -1105,7 +996,7 @@ io.on("connection", socket => {
     if (typeof isPrivate === "boolean") room.settings.isPrivate = isPrivate;
     if (typeof teamMode  === "boolean") room.settings.teamMode  = teamMode;
     if (gameMode !== undefined && gameMode !== null)
-      room.settings.gameMode = ["normal", "boss", "ranked"].includes(gameMode) ? gameMode : room.settings.gameMode;
+      room.settings.gameMode = GAME_MODES.includes(gameMode) ? gameMode : room.settings.gameMode;
 
     broadcastLobby(room);
     io.to(room.id).emit("roomSettingsUpdated", { settings: room.settings });
@@ -1156,12 +1047,6 @@ io.on("connection", socket => {
         ON CONFLICT(id) DO UPDATE SET total_xp = MAX(total_xp, excluded.total_xp), username = excluded.username
       `).run(socket.id, username || p.username, safeXp);
     } catch {}
-  });
-
-  // ── Boss Hit ──────────────────────────────────────────────────────────
-  socket.on("bossHit", ({ damage }) => {
-    const room = getRoomOf(socket.id);
-    if (room?.bossEngine) room.bossEngine.applyDamage(Math.min(damage || 100, 500));
   });
 
   // ── Match Summary ─────────────────────────────────────────────────────
@@ -1359,7 +1244,6 @@ function leaveRoomById(socketId, room) {
 function returnToLobby(room) {
   if (!room) return;
   room.state = LOBBY_STATE.WAITING;
-  if (room.bossEngine) { room.bossEngine.stop(); room.bossEngine = null; }
   room.startedAt = null;
   room.players.forEach(sid => {
     const pl = players.get(sid);

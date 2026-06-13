@@ -27,7 +27,6 @@
 //  ✦ NEW: Reconnect Token flow otomatis dengan overlay UI
 //  ✦ NEW: Power-up bar injected otomatis & stabil
 //  ✦ NEW: Quick Chat extended & whitelist sinkron dengan server
-//  ✦ NEW: Boss Hit radius visual indicator di canvas
 //  ✦ NEW: Match Summary single player dengan stats penuh
 //  ✦ NEW: Latency indicator di header game (in-game ping)
 //  ✦ NEW: Profile panel XP bar animasi smooth
@@ -889,9 +888,6 @@ let inputQueue    = [];
 // Particles
 let particles     = [];
 
-// ★ Boss Tracking FSM
-let bossData      = null;
-
 // ★ Trail Effect — menyimpan posisi kepala snake sebelumnya
 let snakeTrail    = [];
 const TRAIL_MAX   = 12;   // panjang jejak
@@ -1125,75 +1121,6 @@ function drawTrail() {
     ctx.fill();
   }
   ctx.globalAlpha = 1;
-}
-
-function drawBossEngine() {
-  if (selectedMainMode !== "multi" || !bossData || bossData.hp <= 0) return;
-  
-  const { x, y, hp, maxHp, zones } = bossData;
-  const now = performance.now();
-
-  // 1. Gambar Area Deteksi Ancaman (Prediksi Server)
-  if (zones && zones.length > 0) {
-    zones.forEach(z => {
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(z.x, z.y, z.radius, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(255, 59, 92, ${0.15 + Math.abs(Math.sin(now * 0.005)) * 0.15})`;
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "#ff3b5c";
-      ctx.setLineDash([6, 6]);
-      ctx.stroke();
-      ctx.restore();
-
-      // Client-Side Otoritas Kematian Instan (Zero-Latency Hit Detection)
-      if (currentState === STATE.PLAYING && performance.now() > invulnerableUntil) {
-         const head = snake[0];
-         const dist = Math.hypot((head.x + CELL/2) - z.x, (head.y + CELL/2) - z.y);
-         if (dist < z.radius) {
-            handleDeath();
-         }
-      }
-    });
-  }
-
-  // 2. Gambar Fisik Boss (Interpolasi Visual)
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(now * 0.001);
-  ctx.fillStyle = "#0c0c1f";
-  ctx.strokeStyle = "#ff3b5c";
-  ctx.lineWidth = 3;
-  ctx.shadowColor = "#ff3b5c";
-  ctx.shadowBlur = 15;
-  ctx.beginPath();
-  for (let i = 0; i < 8; i++) {
-    const angle = (Math.PI / 4) * i;
-    const px = Math.cos(angle) * 35;
-    const py = Math.sin(angle) * 35;
-    if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
-  }
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-  
-  // Inti Plasma
-  ctx.fillStyle = "#ff8c00";
-  ctx.beginPath();
-  ctx.arc(0, 0, 15 + Math.sin(now * 0.01) * 3, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // 3. HP Bar
-  const hpPct = hp / maxHp;
-  ctx.fillStyle = "rgba(0,0,0,0.7)";
-  ctx.fillRect(x - 40, y - 55, 80, 8);
-  ctx.fillStyle = hpPct > 0.5 ? "#39ff14" : (hpPct > 0.2 ? "#ff8c00" : "#ff3b5c");
-  ctx.fillRect(x - 40, y - 55, 80 * hpPct, 8);
-  ctx.strokeStyle = "#fff";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(x - 40, y - 55, 80, 8);
 }
 
 function drawSnake(t) {
@@ -1628,7 +1555,6 @@ function renderLoop(timestamp) {
   }
 
   drawItems();
-  drawBossEngine();           // ★ Injeksi Boss Renderer di atas items
   updateDrawParticles();
   updateDrawFloatingTexts();  // ★ floating texts
   drawCrownOverlay();         // ★ v7.0 crown atas kepala pemimpin
@@ -1985,7 +1911,6 @@ function initGame() {
   activePowerUps = {};
   shakeIntensity = 0;
   sessionStartTime = performance.now();
-  bossData      = null;
 
   // ★ v7.0 resets
   _sessionSaboteurSent     = 0;
@@ -2251,23 +2176,6 @@ document.addEventListener("keydown", (e) => {
       e.preventDefault();
       openQuickChatPanel();
     }
-    
-    // ★ Boss Hit Detection (Tekan B)
-    if (e.key === "b" || e.key === "B") {
-      if (selectedMainMode === "multi" && bossData && bossData.hp > 0 && socket) {
-        const head = snake[0];
-        if (head) {
-          const dist = Math.hypot(head.x - bossData.x, head.y - bossData.y);
-          if (dist < 90) {
-            socket.emit("bossHit", { damage: 150 });
-            createBurst(bossData.x, bossData.y, "#00cfff", 12);
-            triggerAudio("eat");
-          } else {
-             showFloatingText(head.x, head.y - 10, "Terlalu Jauh!", "#ff3b5c", 0.8);
-          }
-        }
-      }
-    }
 
     // BUG FIX: ESC — pause dulu, lalu konfirmasi (hindari race condition)
     if (e.key === "Escape") {
@@ -2476,11 +2384,6 @@ function bindSocketEvents() {
     saveSessionTokenLocal(token, roomId);
   });
   
-  // ★ BOSS ENGINE SYNC (Fase 2)
-  socket.on("boss_sync", (data) => {
-    bossData = data;
-  });
-
   // ── RECONNECT SUCCESS ────────────────────────────────────────────────
   socket.on("reconnectSuccess", (data) => {
     hideReconnectOverlay();
@@ -2621,7 +2524,7 @@ function bindSocketEvents() {
     // ★ gameMode tag di lobby header
     const gameModeTagEl = document.getElementById("lobbyGameModeTag");
     if (gameModeTagEl) {
-      gameModeTagEl.textContent = data.gameMode === "boss" ? "👹 BOSS MODE" : data.gameMode === "ranked" ? "🏆 RANKED" : "🎮 NORMAL";
+      gameModeTagEl.textContent = data.gameMode === "ranked" ? "🏆 RANKED" : "🎮 NORMAL";
       gameModeTagEl.className   = `lobby-gamemode-tag ${data.gameMode || "normal"}`;
     }
     // ★ Server feature pills
@@ -2886,20 +2789,6 @@ function bindSocketEvents() {
   // ── Player Ready Change ──────────────────────────────────────────────────
   socket.on("playerReadyChange", ({ id, username, isReady }) => {
     appendLobbyChat(null, `${username} ${isReady ? "✅ siap" : "⏳ belum siap"}.`, "system");
-  });
-
-  // ── Boss Loot Drop ───────────────────────────────────────────────────────
-  socket.on("bossLootDrop", ({ type, message }) => {
-    notify("🎁 " + message, "gold", 4000);
-    if (currentState === STATE.PLAYING) {
-      activatePowerUp(type);
-    }
-  });
-
-  // ── Boss Phase Change ────────────────────────────────────────────────────
-  socket.on("bossPhaseChange", ({ phase, message }) => {
-    notify(message, "danger", 3000);
-    triggerScreenShake(10);
   });
 
   // ── Room Lock Changed ────────────────────────────────────────────────────
@@ -3237,7 +3126,6 @@ function injectHostSettingsPanel() {
       <label>Mode Permainan</label>
       <div class="host-mode-row">
         <button class="host-gamemode-btn active" data-gamemode="normal">🎮 NORMAL</button>
-        <button class="host-gamemode-btn" data-gamemode="boss">👹 BOSS</button>
       </div>
     </div>
     <div class="host-settings-row">
@@ -3415,7 +3303,7 @@ function renderRoomBrowserList(rooms) {
   const panel = document.getElementById("roomBrowserPanel");
   if (!panel) return;
 
-  const modeIcons = { easy: "🟢", medium: "🟡", hard: "🔴", boss: "👹", ranked: "🏆" };
+  const modeIcons = { easy: "🟢", medium: "🟡", hard: "🔴", ranked: "🏆" };
 
   if (!rooms || rooms.length === 0) {
     panel.innerHTML = `
@@ -3540,7 +3428,6 @@ function updateServerFeaturePills(features) {
     "quick-join":      "⚡ Quick Join",
     "ping-rtt":        "📶 Ping RTT",
     "kick-player":     "👢 Kick",
-    "boss-engine":     "👹 Boss",
   };
   list.innerHTML = features
     .filter(f => icons[f])
@@ -4192,8 +4079,8 @@ function updateLatencyIndicator(rtt) {
 // Gunakan QUICK_CHAT_PRESETS yang sudah didefinisikan (sinkron dengan server).
 const QUICK_CHAT_EXTENDED = [
   "GG!", "Nice move!", "Siap!", "Follow me!", "Waspada!",
-  "Aku di kanan!", "BOSS mau serang!", "Kumpul sini!",
-  "Mantap!", "Ayo semangat!", "Lawan Boss bareng!", "Hati-hati poop!",
+  "Aku di kanan!", "Kumpul sini!",
+  "Mantap!", "Ayo semangat!", "Hati-hati poop!",
 ];
 
 // ── HELPER: sendQC (untuk onclick inline) ────────────────────────────────
@@ -4219,7 +4106,7 @@ function updateGameModeTag(gameMode) {
     tag.className   = "mode-tag";
     return;
   }
-  const labels = { normal: "MULTI", boss: "👹 BOSS", ranked: "🏆 RANKED" };
+  const labels = { normal: "MULTI", ranked: "🏆 RANKED" };
   tag.textContent = labels[gameMode] || "MULTI";
   tag.className   = "mode-tag multi";
 }
