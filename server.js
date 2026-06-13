@@ -459,6 +459,21 @@ setInterval(() => {
   });
 }, PING_INTERVAL_MS);
 
+// ── Watchdog Heartbeat: force-resolve stuck matches every 5 seconds ────────
+setInterval(() => {
+  rooms.forEach(room => {
+    if (room.state !== LOBBY_STATE.PLAYING) return;
+    const hasActivePlayer = room.players.some(sid => {
+      const pl = players.get(sid);
+      return pl && (pl.status === "alive" || pl.status === "disconnected");
+    });
+    if (!hasActivePlayer) {
+      console.warn(`[Watchdog] Room ${room.id} is PLAYING but has no active players — forcing checkMatchEnd`);
+      checkMatchEnd(room);
+    }
+  });
+}, 5000);
+
 // ════════════════════════════════════════════════════════════════════════════
 //  SOCKET.IO EVENT HANDLERS
 // ════════════════════════════════════════════════════════════════════════════
@@ -564,9 +579,13 @@ io.on("connection", socket => {
         teamMode:   teamMode || false,
         isPrivate:  isPrivate || false,
       },
-      createdAt:  Date.now(),
-      startedAt:  null,
-      isLocked:   false,
+      createdAt:           Date.now(),
+      startedAt:           null,
+      isLocked:            false,
+      initialPlayerCount:  0,
+      matchSummaryTimer:   null,
+      returnToLobbyTimer:  null,
+      matchResultSnapshot: null,
     };
     rooms.set(roomId, room);
 
@@ -799,9 +818,13 @@ io.on("connection", socket => {
           teamMode:   false,
           isPrivate:  false,
         },
-        createdAt:  Date.now(),
-        startedAt:  null,
-        isLocked:   false,
+        createdAt:           Date.now(),
+        startedAt:           null,
+        isLocked:            false,
+        initialPlayerCount:  0,
+        matchSummaryTimer:   null,
+        returnToLobbyTimer:  null,
+        matchResultSnapshot: null,
       };
       rooms.set(roomId, room);
 
@@ -859,6 +882,7 @@ io.on("connection", socket => {
       if (count < 0) {
         clearInterval(cd);
         room.state = LOBBY_STATE.PLAYING;
+        room.initialPlayerCount = room.players.length; // Locked snapshot for lifecycle logic
         room.players.forEach(sid => {
           const p = players.get(sid);
           if (p) p.status = "alive";
@@ -912,86 +936,9 @@ io.on("connection", socket => {
     updateGlobalScore(p);
     broadcastLeaderboard(room);
 
-    // Cek apakah match selesai
-    if (p.status === "dead" && room.state === LOBBY_STATE.PLAYING) {
-      const alivePlayers = room.players.filter(sid => {
-        const pl = players.get(sid);
-        return pl && pl.status === "alive";
-      });
-
-      // Kondisi selesai:
-      // A. Multiplayer: tersisa <= 1 pemain hidup
-      // B. Solo: pemain satu-satunya mati
-      const isMultiplayer = room.players.length > 1;
-      const matchEnded    = isMultiplayer
-        ? alivePlayers.length <= 1
-        : alivePlayers.length === 0;
-
-      if (matchEnded) {
-        room.state = LOBBY_STATE.FINISHED;
-
-        // ── BAGIAN 2: Winner Calculation ──────────────────────────────
-        // A. Jika tersisa satu pemain hidup → dia menang
-        // B. Jika semua mati → score tertinggi menang
-        let winner = null;
-        if (alivePlayers.length === 1) {
-          winner = players.get(alivePlayers[0]) || null;
-        } else {
-          // Semua mati — cari score tertinggi
-          let topScore = -1;
-          room.players.forEach(sid => {
-            const pl = players.get(sid);
-            if (pl && (pl.score || 0) > topScore) {
-              topScore = pl.score || 0;
-              winner   = pl;
-            }
-          });
-        }
-
-        // ── BAGIAN 3: Ranking Calculation ─────────────────────────────
-        // Urutkan berdasarkan: 1) score tertinggi, 2) survival time terlama
-        const matchEndTime = Date.now();
-        const rankings = room.players
-          .map(sid => {
-            const pl = players.get(sid);
-            if (!pl) return null;
-            // Survival time: waktu sejak match mulai sampai pemain mati
-            // Jika masih hidup (solo case) atau belum ada startedAt, gunakan durasi penuh
-            const survivalMs = (pl.diedAt && room.startedAt)
-              ? pl.diedAt - room.startedAt
-              : (room.startedAt ? matchEndTime - room.startedAt : 0);
-            return {
-              id:          sid,
-              username:    pl.username,
-              score:       pl.score || 0,
-              survivalMs,
-              status:      pl.status,
-              color:       pl.color,
-            };
-          })
-          .filter(Boolean)
-          .sort((a, b) => {
-            if (b.score !== a.score) return b.score - a.score;  // 1. score tertinggi
-            return b.survivalMs - a.survivalMs;                  // 2. survival time terlama
-          })
-          .map((entry, idx) => ({ ...entry, rank: idx + 1 }));
-
-        const reason = winner
-          ? `🏆 ${winner.username} menang!`
-          : "Semua pemain selesai. 🏁";
-
-        // ── BAGIAN 4: matchFinished Payload ───────────────────────────
-        io.to(room.id).emit("matchFinished", {
-          winner:   winner ? { id: winner.id, username: winner.username, score: winner.score || 0 } : null,
-          rankings,
-          reason,
-        });
-
-        saveMatchHistory(room, winner);
-
-        setTimeout(() => broadcastMatchSummary(room), 1000);
-        setTimeout(() => returnToLobby(room), 10000);
-      }
+    // Delegate all match-end evaluation to centralized engine
+    if (data.status === "dead") {
+      checkMatchEnd(room);
     }
   });
 
@@ -1085,7 +1032,7 @@ io.on("connection", socket => {
     const room = getRoomOf(socket.id);
     const p    = players.get(socket.id);
     if (!p) return;
-    if (room) {
+    if (room && room.matchResultSnapshot) {
       broadcastMatchSummary(room);
     } else {
       socket.emit("matchSummaryData", {
@@ -1183,6 +1130,8 @@ io.on("connection", socket => {
       const timer = setTimeout(() => {
         leaveRoomById(socket.id, room);
         disconnectTimers.delete(socket.id);
+        // Trigger centralized match-end check: player timeout counts as elimination
+        checkMatchEnd(room);
       }, RECONNECT_GRACE_MS);
       disconnectTimers.set(socket.id, timer);
     } else {
@@ -1192,38 +1141,166 @@ io.on("connection", socket => {
 });
 
 // ════════════════════════════════════════════════════════════════════════════
+//  CENTRALIZED MATCH LIFECYCLE ENGINE
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * determineWinner(room) — Pure function: evaluates room state and returns winner object or null.
+ * Case 1: 1 Alive, 0+ Disconnected → the alive player wins.
+ * Case 2: 0 Alive, 1 Disconnected  → the disconnected player wins (last remaining).
+ * Case 3: All Dead, 0 Disconnected → highest score wins.
+ * Case 4: Dead + Disconnected mix, 0 Alive → highest score among all wins.
+ */
+function determineWinner(room) {
+  const alivePlayers        = room.players.filter(sid => players.get(sid)?.status === "alive");
+  const disconnectedPlayers = room.players.filter(sid => players.get(sid)?.status === "disconnected");
+  const allPlayerObjects    = room.players.map(sid => players.get(sid)).filter(Boolean);
+
+  // Case 1
+  if (alivePlayers.length === 1) {
+    return players.get(alivePlayers[0]) || null;
+  }
+
+  // Case 2
+  if (alivePlayers.length === 0 && disconnectedPlayers.length === 1) {
+    return players.get(disconnectedPlayers[0]) || null;
+  }
+
+  // Case 3 & 4: highest score among all remaining players
+  if (allPlayerObjects.length === 0) return null;
+  return allPlayerObjects.reduce((best, p) => {
+    return (p.score || 0) > (best.score || 0) ? p : best;
+  }, allPlayerObjects[0]);
+}
+
+/**
+ * checkMatchEnd(room) — Single source of truth for match termination.
+ * Guard clause prevents double-triggering.
+ */
+function checkMatchEnd(room) {
+  if (room.state !== LOBBY_STATE.PLAYING) return;
+
+  const alivePlayers        = room.players.filter(sid => players.get(sid)?.status === "alive");
+  const disconnectedPlayers = room.players.filter(sid => players.get(sid)?.status === "disconnected");
+  const isMultiplayer       = room.initialPlayerCount > 1;
+
+  let matchEnded;
+  if (isMultiplayer) {
+    matchEnded = (alivePlayers.length === 0) ||
+                 (alivePlayers.length === 1 && disconnectedPlayers.length === 0);
+  } else {
+    matchEnded = (alivePlayers.length === 0);
+  }
+
+  if (!matchEnded) return;
+
+  // ── Lock state immediately to prevent re-entry ──
+  room.state = LOBBY_STATE.FINISHED;
+
+  const winner       = determineWinner(room);
+  const matchEndTime = Date.now();
+
+  // ── Build immutable rankings snapshot ──
+  const rankings = room.players
+    .map(sid => {
+      const pl = players.get(sid);
+      if (!pl) return null;
+      const survivalMs = (pl.diedAt && room.startedAt)
+        ? pl.diedAt - room.startedAt
+        : (room.startedAt ? matchEndTime - room.startedAt : 0);
+      return {
+        id:         sid,
+        username:   pl.username,
+        score:      pl.score || 0,
+        survivalMs,
+        status:     pl.status,
+        color:      pl.color,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return b.survivalMs - a.survivalMs;
+    })
+    .map((entry, idx) => ({ ...entry, rank: idx + 1 }));
+
+  const reason = winner
+    ? `🏆 ${winner.username} menang!`
+    : "Semua pemain selesai. 🏁";
+
+  // ── Cache result snapshot (immutable reference for broadcastMatchSummary) ──
+  room.matchResultSnapshot = {
+    winner:   winner ? { id: winner.id, username: winner.username, score: winner.score || 0 } : null,
+    rankings,
+    reason,
+    playerSummaries: room.players.map(sid => {
+      const pl = players.get(sid);
+      if (!pl) return null;
+      const rank = rankings.find(r => r.id === sid)?.rank ?? null;
+      const awards = [];
+      if (rank === 1)                                        awards.push({ icon: "🏆", label: "Juara Pertama!" });
+      if ((pl.sessionStats?.highestCombo || 0) >= 10)       awards.push({ icon: "🔥", label: "Combo Master!" });
+      if ((pl.sessionStats?.applesEaten || 0) >= 30)        awards.push({ icon: "🍎", label: "Apple Maniac!" });
+      if ((pl.sessionStats?.goldCollected || 0) >= 10)      awards.push({ icon: "✨", label: "Golden Touch!" });
+      if ((pl.sessionStats?.saboteurSent || 0) >= 3)        awards.push({ icon: "👻", label: "Saboteur!" });
+      if (rank === rankings.length && rankings.length > 1)  awards.push({ icon: "🐌", label: "Last Survivor" });
+      return {
+        id:           sid,
+        username:     pl.username,
+        finalScore:   pl.score || 0,
+        finalRank:    rank,
+        totalPlayers: rankings.length,
+        stats:        { ...(pl.sessionStats || emptyStats()) },
+        awards,
+        mode:         room.settings.mode,
+        teamMode:     room.settings.teamMode,
+        team:         pl.team,
+      };
+    }).filter(Boolean),
+    seasonalEvent: getCurrentSeasonalEvent(),
+  };
+
+  // ── Emit matchFinished ──
+  io.to(room.id).emit("matchFinished", {
+    winner:   room.matchResultSnapshot.winner,
+    rankings: room.matchResultSnapshot.rankings,
+    reason:   room.matchResultSnapshot.reason,
+  });
+
+  saveMatchHistory(room, winner);
+
+  // ── Schedule timers (store refs for cancellation) ──
+  room.matchSummaryTimer  = setTimeout(() => broadcastMatchSummary(room), 1000);
+  room.returnToLobbyTimer = setTimeout(() => returnToLobby(room), 10000);
+
+  console.log(`[Match] Room ${room.id} finished. Winner: ${winner?.username || "none"}`);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  MATCH SUMMARY BROADCAST
 // ════════════════════════════════════════════════════════════════════════════
 function broadcastMatchSummary(room) {
   if (!room) return;
-  const sortedPlayers = room.players
-    .map(sid => players.get(sid))
-    .filter(Boolean)
-    .sort((a, b) => (b.score || 0) - (a.score || 0));
 
-  const seasonalEvent = getCurrentSeasonalEvent();
+  // Read from immutable snapshot to avoid stale data after returnToLobby resets scores
+  const snapshot = room.matchResultSnapshot;
+  if (!snapshot) {
+    // Fallback for requestMatchSummary on solo players with no snapshot
+    return;
+  }
 
-  sortedPlayers.forEach((p, index) => {
-    const rank   = index + 1;
-    const awards = [];
-    if (rank === 1)                                          awards.push({ icon: "🏆", label: "Juara Pertama!" });
-    if ((p.sessionStats?.highestCombo || 0) >= 10)          awards.push({ icon: "🔥", label: "Combo Master!" });
-    if ((p.sessionStats?.applesEaten || 0) >= 30)           awards.push({ icon: "🍎", label: "Apple Maniac!" });
-    if ((p.sessionStats?.goldCollected || 0) >= 10)         awards.push({ icon: "✨", label: "Golden Touch!" });
-    if ((p.sessionStats?.saboteurSent || 0) >= 3)           awards.push({ icon: "👻", label: "Saboteur!" });
-    if (rank === sortedPlayers.length && sortedPlayers.length > 1) awards.push({ icon: "🐌", label: "Last Survivor" });
-
-    io.to(p.id).emit("matchSummaryData", {
-      username:     p.username,
-      finalScore:   p.score || 0,
-      finalRank:    rank,
-      totalPlayers: sortedPlayers.length,
-      stats:        p.sessionStats || emptyStats(),
-      awards,
-      mode:         room.settings.mode,
-      seasonalEvent,
-      teamMode:     room.settings.teamMode,
-      team:         p.team,
+  snapshot.playerSummaries.forEach(summary => {
+    io.to(summary.id).emit("matchSummaryData", {
+      username:     summary.username,
+      finalScore:   summary.finalScore,
+      finalRank:    summary.finalRank,
+      totalPlayers: summary.totalPlayers,
+      stats:        summary.stats,
+      awards:       summary.awards,
+      mode:         summary.mode,
+      seasonalEvent: snapshot.seasonalEvent,
+      teamMode:     summary.teamMode,
+      team:         summary.team,
     });
   });
 }
@@ -1237,6 +1314,11 @@ function leaveRoomById(socketId, room) {
   if (!room) return;
   const p = players.get(socketId);
 
+  // Cleanup orphan session tokens for this socket before removing player data
+  sessionTokens.forEach((stored, token) => {
+    if (stored.socketId === socketId) sessionTokens.delete(token);
+  });
+
   room.players = room.players.filter(sid => sid !== socketId);
 
   if (p) {
@@ -1247,6 +1329,12 @@ function leaveRoomById(socketId, room) {
   players.delete(socketId);
 
   if (room.players.length === 0) {
+    // Cancel any active match timers before ghosting the room
+    clearTimeout(room.matchSummaryTimer);
+    clearTimeout(room.returnToLobbyTimer);
+    room.matchSummaryTimer  = null;
+    room.returnToLobbyTimer = null;
+
     // FIX: Hanya set ghost timer sekali
     if (!roomGhostTimers.has(room.id)) {
       const gt = setTimeout(() => {
@@ -1265,6 +1353,9 @@ function leaveRoomById(socketId, room) {
 
 function returnToLobby(room) {
   if (!room) return;
+  // Prevent double-execution if host clicks "Return to Lobby" before auto-timer fires
+  clearTimeout(room.returnToLobbyTimer);
+  room.returnToLobbyTimer = null;
   room.state = LOBBY_STATE.WAITING;
   room.startedAt = null;
   room.players.forEach(sid => {
