@@ -61,7 +61,7 @@ try {
   `);
   console.log("[DB] SQLite aktif: arcade.db");
 } catch {
-  console.warn("[DB] better-sqlite3 tidak ditemukan → Mode RAM (Ranked + History disabled)");
+  console.warn("[DB] better-sqlite3 tidak ditemukan → Mode RAM (History disabled)");
 }
 
 // ── Optional: QR Code ─────────────────────────────────────────────────────
@@ -79,10 +79,9 @@ const CHAT_COOLDOWN_MS   = 2_000;
 const PING_INTERVAL_MS   = 5_000;
 const MAX_SPECTATORS     = 10;
 
-// ── Game Mode Whitelist (Fase 1: Boss Mode dihapus) ────────────────────────
+// ── Game Mode Whitelist ────────────────────────────────────────────────────
 const GAME_MODES = [
-  "normal",
-  "ranked"
+  "normal"
 ];
 
 // ── Seasonal Event ────────────────────────────────────────────────────────
@@ -248,7 +247,7 @@ app.get("/api/server-info", (_, res) => {
     features: [
       "lobby-v2", "token-reconnect", "room-browser", "quick-join",
       "ping-rtt", "kick-player", "host-migration", "ghost-timer",
-      "ranked-elo", "quick-chat", "lobby-chat",
+      "quick-chat", "lobby-chat",
       "match-summary", "host-lock-room", "spectator-mode",
       "match-history", "seasonal-events", "team-mode", "vote-kick",
     ],
@@ -281,39 +280,6 @@ app.get("/api/player/:id", (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ════════════════════════════════════════════════════════════════════════════
-//  RANKED ELO
-// ════════════════════════════════════════════════════════════════════════════
-function calculateElo(playersArr) {
-  if (!db || playersArr.length < 2) return;
-  let totalRp = 0;
-  const data  = [];
-  for (const p of playersArr) {
-    const row = db.prepare("SELECT rp FROM players WHERE id = ?").get(p.id);
-    const rp  = row?.rp ?? 1000;
-    totalRp  += rp;
-    data.push({ id: p.id, username: p.username, rp, score: p.score || 0 });
-  }
-  const avgRp    = totalRp / data.length;
-  const avgScore = data.reduce((s, p) => s + p.score, 0) / data.length;
-  for (const p of data) {
-    const expected = 1 / (1 + Math.pow(10, (avgRp - p.rp) / 400));
-    const actual   = p.score > avgScore ? 1 : 0;
-    const newRp    = Math.max(0, Math.round(p.rp + 32 * (actual - expected)));
-    let tier = "Bronze";
-    if (newRp >= 2200)      tier = "Serpent God";
-    else if (newRp >= 1800) tier = "Anaconda";
-    else if (newRp >= 1400) tier = "Cobra";
-    else if (newRp >= 1200) tier = "Viper";
-    else if (newRp >= 1000) tier = "Striker";
-    else if (newRp >= 800)  tier = "Hunter";
-    else if (newRp >= 600)  tier = "Explorer";
-    db.prepare(`
-      INSERT INTO players (id, username, rp, tier) VALUES (?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET rp=excluded.rp, tier=excluded.tier, username=excluded.username
-    `).run(p.id, p.username, newRp, tier);
-  }
-}
 
 function saveMatchHistory(room, winner) {
   if (!db) return;
@@ -433,7 +399,7 @@ function broadcastLobby(room) {
     seasonalEvent: getCurrentSeasonalEvent(),
     features: [
       "lobby-v2", "token-reconnect", "room-browser", "quick-join",
-      "ping-rtt", "kick-player", "ranked-elo", "quick-chat",
+      "ping-rtt", "kick-player", "quick-chat",
       "match-summary", "spectator-mode", "team-mode", "vote-kick",
       "seasonal-events", "global-leaderboard",
     ],
@@ -593,8 +559,8 @@ io.on("connection", socket => {
       settings: {
         name:       (roomName || "").substring(0, 20) || `${name}'s Room`,
         maxPlayers: 8,
-        mode:       mode || "easy",
-        gameMode:   gameMode || "normal",
+        mode:       ["easy", "medium", "hard"].includes(mode) ? mode : "easy",
+        gameMode:   GAME_MODES.includes(gameMode) ? gameMode : "normal",
         teamMode:   teamMode || false,
         isPrivate:  isPrivate || false,
       },
@@ -620,7 +586,7 @@ io.on("connection", socket => {
       score:        0,
       lives:        3,
       ping:         0,
-      mode:         mode || "easy",
+      mode:         ["easy", "medium", "hard"].includes(mode) ? mode : "easy",
       sessionStats: emptyStats(),
       lastX: null, lastY: null, dx: 0, dy: 0,
       team: teamMode ? "red" : null,
@@ -700,7 +666,7 @@ io.on("connection", socket => {
       score:        0,
       lives:        3,
       ping:         0,
-      mode:         mode || "easy",
+      mode:         ["easy", "medium", "hard"].includes(mode) ? mode : "easy",
       sessionStats: emptyStats(),
       lastX: null, lastY: null, dx: 0, dy: 0,
       team,
@@ -794,7 +760,7 @@ io.on("connection", socket => {
       players.set(socket.id, {
         id: socket.id, username: name, color: color || "#00cfff",
         roomId: targetRoom.id, isReady: false, status: "lobby",
-        score: 0, lives: 3, ping: 0, mode: mode || "easy",
+        score: 0, lives: 3, ping: 0, mode: ["easy", "medium", "hard"].includes(mode) ? mode : "easy",
         sessionStats: emptyStats(), lastX: null, lastY: null, dx: 0, dy: 0, team,
       });
 
@@ -828,7 +794,7 @@ io.on("connection", socket => {
         settings: {
           name:       `${name}'s Room`,
           maxPlayers: 8,
-          mode:       mode || "easy",
+          mode:       ["easy", "medium", "hard"].includes(mode) ? mode : "easy",
           gameMode:   "normal",
           teamMode:   false,
           isPrivate:  false,
@@ -842,7 +808,7 @@ io.on("connection", socket => {
       players.set(socket.id, {
         id: socket.id, username: name, color: color || "#00cfff",
         roomId, isReady: true, status: "lobby",
-        score: 0, lives: 3, ping: 0, mode: mode || "easy",
+        score: 0, lives: 3, ping: 0, mode: ["easy", "medium", "hard"].includes(mode) ? mode : "easy",
         sessionStats: emptyStats(), lastX: null, lastY: null, dx: 0, dy: 0, team: null,
       });
 
@@ -932,7 +898,11 @@ io.on("connection", socket => {
     }
 
     if (data.lives  !== undefined) p.lives  = data.lives;
-    if (data.status !== undefined) p.status = data.status;
+    if (data.status !== undefined) {
+      // Catat timestamp kematian untuk ranking survival time
+      if (data.status === "dead" && p.status !== "dead") p.diedAt = Date.now();
+      p.status = data.status;
+    }
     if (data.x      !== undefined) p.lastX  = data.x;
     if (data.y      !== undefined) p.lastY  = data.y;
     if (data.dx     !== undefined) p.dx     = data.dx;
@@ -949,13 +919,74 @@ io.on("connection", socket => {
         return pl && pl.status === "alive";
       });
 
-      if (alivePlayers.length <= 1 && room.players.length > 1) {
-        room.state = LOBBY_STATE.FINISHED;
-        const winner = alivePlayers.length === 1 ? players.get(alivePlayers[0]) : null;
-        const reason = winner ? `🏆 ${winner.username} menang!` : "Semua pemain selesai. 🏁";
-        io.to(room.id).emit("matchFinished", { reason });
+      // Kondisi selesai:
+      // A. Multiplayer: tersisa <= 1 pemain hidup
+      // B. Solo: pemain satu-satunya mati
+      const isMultiplayer = room.players.length > 1;
+      const matchEnded    = isMultiplayer
+        ? alivePlayers.length <= 1
+        : alivePlayers.length === 0;
 
-        if (room.settings.mode === "ranked") calculateElo(room.players.map(sid => players.get(sid)).filter(Boolean));
+      if (matchEnded) {
+        room.state = LOBBY_STATE.FINISHED;
+
+        // ── BAGIAN 2: Winner Calculation ──────────────────────────────
+        // A. Jika tersisa satu pemain hidup → dia menang
+        // B. Jika semua mati → score tertinggi menang
+        let winner = null;
+        if (alivePlayers.length === 1) {
+          winner = players.get(alivePlayers[0]) || null;
+        } else {
+          // Semua mati — cari score tertinggi
+          let topScore = -1;
+          room.players.forEach(sid => {
+            const pl = players.get(sid);
+            if (pl && (pl.score || 0) > topScore) {
+              topScore = pl.score || 0;
+              winner   = pl;
+            }
+          });
+        }
+
+        // ── BAGIAN 3: Ranking Calculation ─────────────────────────────
+        // Urutkan berdasarkan: 1) score tertinggi, 2) survival time terlama
+        const matchEndTime = Date.now();
+        const rankings = room.players
+          .map(sid => {
+            const pl = players.get(sid);
+            if (!pl) return null;
+            // Survival time: waktu sejak match mulai sampai pemain mati
+            // Jika masih hidup (solo case) atau belum ada startedAt, gunakan durasi penuh
+            const survivalMs = (pl.diedAt && room.startedAt)
+              ? pl.diedAt - room.startedAt
+              : (room.startedAt ? matchEndTime - room.startedAt : 0);
+            return {
+              id:          sid,
+              username:    pl.username,
+              score:       pl.score || 0,
+              survivalMs,
+              status:      pl.status,
+              color:       pl.color,
+            };
+          })
+          .filter(Boolean)
+          .sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;  // 1. score tertinggi
+            return b.survivalMs - a.survivalMs;                  // 2. survival time terlama
+          })
+          .map((entry, idx) => ({ ...entry, rank: idx + 1 }));
+
+        const reason = winner
+          ? `🏆 ${winner.username} menang!`
+          : "Semua pemain selesai. 🏁";
+
+        // ── BAGIAN 4: matchFinished Payload ───────────────────────────
+        io.to(room.id).emit("matchFinished", {
+          winner:   winner ? { id: winner.id, username: winner.username, score: winner.score || 0 } : null,
+          rankings,
+          reason,
+        });
+
         saveMatchHistory(room, winner);
 
         setTimeout(() => broadcastMatchSummary(room), 1000);
@@ -988,7 +1019,7 @@ io.on("connection", socket => {
     if (roomName !== undefined && roomName !== null)
       room.settings.name = roomName.toString().substring(0, 20).trim() || room.settings.name;
     if (mode !== undefined && mode !== null)
-      room.settings.mode = ["easy", "medium", "hard", "ranked"].includes(mode) ? mode : room.settings.mode;
+      room.settings.mode = ["easy", "medium", "hard"].includes(mode) ? mode : room.settings.mode;
     if (maxPlayers !== undefined && maxPlayers !== null) {
       const mp = parseInt(maxPlayers);
       if (!isNaN(mp)) room.settings.maxPlayers = Math.min(8, Math.max(1, mp));
@@ -1182,14 +1213,6 @@ function broadcastMatchSummary(room) {
     if ((p.sessionStats?.saboteurSent || 0) >= 3)           awards.push({ icon: "👻", label: "Saboteur!" });
     if (rank === sortedPlayers.length && sortedPlayers.length > 1) awards.push({ icon: "🐌", label: "Last Survivor" });
 
-    let rpChange = null;
-    if (room.settings.mode === "ranked" && db) {
-      try {
-        const row = db.prepare("SELECT rp, tier FROM players WHERE id = ?").get(p.id);
-        if (row) rpChange = { rp: row.rp, tier: row.tier };
-      } catch {}
-    }
-
     io.to(p.id).emit("matchSummaryData", {
       username:     p.username,
       finalScore:   p.score || 0,
@@ -1197,7 +1220,6 @@ function broadcastMatchSummary(room) {
       totalPlayers: sortedPlayers.length,
       stats:        p.sessionStats || emptyStats(),
       awards,
-      rpChange,
       mode:         room.settings.mode,
       seasonalEvent,
       teamMode:     room.settings.teamMode,
@@ -1247,7 +1269,7 @@ function returnToLobby(room) {
   room.startedAt = null;
   room.players.forEach(sid => {
     const pl = players.get(sid);
-    if (pl) { pl.isReady = false; pl.status = "lobby"; pl.score = 0; pl.sessionStats = emptyStats(); }
+    if (pl) { pl.isReady = false; pl.status = "lobby"; pl.score = 0; pl.sessionStats = emptyStats(); pl.diedAt = null; }
   });
   const host = players.get(room.hostId);
   if (host) host.isReady = true;
@@ -1279,7 +1301,7 @@ if (require.main === module) {
       console.log(`   ⚠️  Tidak ada network LAN fisik terdeteksi. Gunakan localhost.`);
     }
     
-    console.log(`\n   ➜ DB     : ${db ? "SQLite Active (Ranked + History enabled)" : "RAM Mode"}`);
+    console.log(`\n   ➜ DB     : ${db ? "SQLite Active (Match History enabled)" : "RAM Mode"}`);
     console.log(`   ➜ Event  : ${event.name} (x${event.multiplier})`);
     console.log(`   ➜ API    : /api/rooms | /api/leaderboard | /api/player/:id | /health`);
     console.log();

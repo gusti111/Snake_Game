@@ -2524,8 +2524,8 @@ function bindSocketEvents() {
     // ★ gameMode tag di lobby header
     const gameModeTagEl = document.getElementById("lobbyGameModeTag");
     if (gameModeTagEl) {
-      gameModeTagEl.textContent = data.gameMode === "ranked" ? "🏆 RANKED" : "🎮 NORMAL";
-      gameModeTagEl.className   = `lobby-gamemode-tag ${data.gameMode || "normal"}`;
+      gameModeTagEl.textContent = "🎮 NORMAL";
+      gameModeTagEl.className   = `lobby-gamemode-tag normal`;
     }
     // ★ Server feature pills
     if (data.features) renderServerFeaturePills(data.features);
@@ -2624,8 +2624,16 @@ function bindSocketEvents() {
   });
 
   // ── Match Finished ───────────────────────────────────────────────────────
-  socket.on("matchFinished", ({ reason }) => {
-    notify("🏁 " + reason, "success", 4000);
+  socket.on("matchFinished", ({ reason, winner, rankings }) => {
+    // Tampilkan notifikasi pemenang atau alasan akhir match
+    const notifMsg = winner
+      ? `🏆 ${winner.username} menang! (Skor: ${winner.score})`
+      : "🏁 " + reason;
+    notify(notifMsg, "success", 4000);
+    // Log rankings ke console untuk debugging (tidak mengubah UI)
+    if (rankings && rankings.length > 0) {
+      console.log("[matchFinished] Rankings:", rankings);
+    }
     setTimeout(() => {
       if (socket && socket.connected) {
         socket.emit("requestMatchSummary");
@@ -2995,7 +3003,7 @@ function renderLobbyMembers(data) {
     const statusLabel = m.status === "disconnected" ? "DISCONNECT" : (m.isReady || isHost ? "SIAP ✓" : "TUNGGU");
     const readyGlow = (m.isReady || isHost) && m.status !== "disconnected";
 
-    // ★ FASE 1: Tier badge ranked
+    // ★ FASE 1: Tier badge pemain
     const tierBadge = m.tier && m.tier !== 'Bronze'
       ? `<span class="lp-badge tier-badge">${m.tier.toUpperCase()}</span>` : '';
 
@@ -3119,7 +3127,6 @@ function injectHostSettingsPanel() {
         <button class="host-mode-btn active" data-mode="easy">EASY</button>
         <button class="host-mode-btn" data-mode="medium">MEDIUM</button>
         <button class="host-mode-btn" data-mode="hard">HARD</button>
-        <button class="host-mode-btn" data-mode="ranked">RANKED</button>
       </div>
     </div>
     <div class="host-settings-row">
@@ -3303,7 +3310,7 @@ function renderRoomBrowserList(rooms) {
   const panel = document.getElementById("roomBrowserPanel");
   if (!panel) return;
 
-  const modeIcons = { easy: "🟢", medium: "🟡", hard: "🔴", ranked: "🏆" };
+  const modeIcons = { easy: "🟢", medium: "🟡", hard: "🔴" };
 
   if (!rooms || rooms.length === 0) {
     panel.innerHTML = `
@@ -4106,7 +4113,7 @@ function updateGameModeTag(gameMode) {
     tag.className   = "mode-tag";
     return;
   }
-  const labels = { normal: "MULTI", ranked: "🏆 RANKED" };
+  const labels = { normal: "MULTI" };
   tag.textContent = labels[gameMode] || "MULTI";
   tag.className   = "mode-tag multi";
 }
